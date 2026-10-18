@@ -1,0 +1,295 @@
+# Public releases, one per pushed tag v<X.Y.Z>. Development happens on a private GitLab;
+# scripts/publish-github.sh brings it here as one squashed commit per publish, and with --tag puts
+# the tag on that public commit. A push to main alone only runs ci.yml.
+#
+# The version is the tag's: the build refuses a tag that is not android/gradle.properties's
+# kai.version and core/Cargo.toml's version (scripts/release.sh sets both and tags in one go). The
+# release notes are the annotated tag's message. The APK is named kai-mobile-<X.Y.Z>.apk and its
+# versionName is the plain X.Y.Z; its versionCode is 100000000 + major * 1000000 + minor * 1000 +
+# patch (android/app/build.gradle.kts, README.md "Versions"), checked against the built APK below.
+#
+# Two jobs, so the token that can write never meets the build: `build` (contents: read) compiles the
+# tag, and with it every dependency's build script, Gradle plugin and proc macro, and signs the APK
+# with the release key; `publish` (contents: write) runs no code of this repository, built or not,
+# on a fresh runner: it checks the artifact (the tag's version, the file names, the checksum) and
+# creates the release with gh.
+#
+# The signing secrets never meet third-party build code. The build, in the build image, gets no
+# secret and no keystore and produces the UNSIGNED APK. The next step signs it in a container of its
+# own (scripts/github-sign.sh: --network none, only the keystore and the unsigned APK mounted, the
+# image's apksigner), and is the only step with the secrets; the step after it verifies the signed
+# APK (version, alignment, signature, and the signer's certificate against the pinned SHA-256)
+# again without any secret.
+#
+# Settings > Secrets and variables > Actions, see README.md, "Maintainers":
+#   Repository secrets
+#     KAI_KEYSTORE_B64          the PKCS12 release keystore as `base64 -w0`
+#     KAI_KEYSTORE_PASSWORD     its password
+#     KAI_KEY_PASSWORD          optional; a PKCS12 keystore uses the store password for its key
+#   Repository variables (public)
+#     KAI_KEY_ALIAS             the key's alias
+#     KAI_SIGNING_CERT_SHA256   the SHA-256 of the release certificate (64 hex digits): the release
+#                               fails when it is unset or the signed APK's certificate differs
+# The signing step decodes the keystore into a private temporary file outside the checkout and
+# deletes it when its shell exits.
+#
+# lmgw's crates come from the public lmgw at the release LMGW_PIN names (lmgw_tag), cloned next to
+# this checkout; the build refuses it unless its tree is the pinned tree (scripts/lmgw-pin.sh
+# clone-published), so lmgw's release must be published before Kai mobile's that names it. No
+# cache: a release is built from scratch, the image included (scripts/github-container.sh).
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  # Builds an existing tag from this workflow's version (a tag push that started no run, or a
+  # re-build): the build checks out refs/tags/<tag>, the tag is never moved.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to build and release, v<X.Y.Z>"
+        required: true
+        type: string
+
+# Each job names what it needs.
+permissions: {}
+
+# One release at a time and never cancelled half-way: a newer push waits for the running one
+# (GitHub keeps only the newest pending run).
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  build:
+    name: Build
+    # Not in forks: they hold no signing secrets.
+    if: github.repository == 'lmgw-dev/kai-mobile'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    # A cold build of the image, the core (release, thin LTO) and Gradle's dependencies; this
+    # bounds what a hung build can cost.
+    timeout-minutes: 150
+    env:
+      # The tag being built: the pushed one, or the dispatch input.
+      KAI_RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+    steps:
+      - name: Check the tag exists
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          [[ "$KAI_RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] \
+            || { echo "::error::$KAI_RELEASE_TAG is no v<X.Y.Z> tag"; exit 1; }
+          git ls-remote --exit-code --tags "https://github.com/${GITHUB_REPOSITORY}.git" \
+            "refs/tags/${KAI_RELEASE_TAG}" >/dev/null \
+            || { echo "::error::tag $KAI_RELEASE_TAG does not exist"; exit 1; }
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', inputs.tag) || github.ref }}
+          persist-credentials: false
+
+      # The versions the build will carry: the tag's, which the sources must agree with.
+      - name: The tag is the version of the sources
+        id: version
+        run: |
+          fail() { echo "::error::$*"; exit 1; }
+          [[ "$KAI_RELEASE_TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]] \
+            || fail "$KAI_RELEASE_TAG is no v<X.Y.Z> tag"
+          major="${BASH_REMATCH[1]}" minor="${BASH_REMATCH[2]}" patch="${BASH_REMATCH[3]}"
+          version="$major.$minor.$patch"
+          ((major <= 999 && minor <= 999 && patch <= 999)) || fail "$version has a field above 999"
+          props="$(sed -nE 's/^kai\.version=(.*)$/\1/p' android/gradle.properties)"
+          core="$(grep -m1 -oE '^version = "[^"]*"' core/Cargo.toml | cut -d'"' -f2)"
+          [[ "$props" == "$version" ]] || fail "android/gradle.properties says kai.version=$props, the tag $KAI_RELEASE_TAG"
+          [[ "$core" == "$version" ]] || fail "core/Cargo.toml says $core, the tag $KAI_RELEASE_TAG"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "code=$((100000000 + major * 1000000 + minor * 1000 + patch))" >> "$GITHUB_OUTPUT"
+
+      - name: lmgw at the pinned release, next to the checkout
+        run: bash scripts/lmgw-pin.sh clone-published ../lmgw
+
+      # What the release needs, before a build of an hour: the secrets exist (their values stay
+      # out of this step), the alias and the pinned certificate are set and well-formed.
+      - name: The signing settings are set
+        env:
+          HAVE_KEYSTORE: ${{ secrets.KAI_KEYSTORE_B64 != '' }}
+          HAVE_PASSWORD: ${{ secrets.KAI_KEYSTORE_PASSWORD != '' }}
+          KAI_KEY_ALIAS: ${{ vars.KAI_KEY_ALIAS }}
+          KAI_SIGNING_CERT_SHA256: ${{ vars.KAI_SIGNING_CERT_SHA256 }}
+        run: |
+          fail() { echo "::error::$*"; exit 1; }
+          [[ "$HAVE_KEYSTORE" == true ]] || fail "the secret KAI_KEYSTORE_B64 is not set"
+          [[ "$HAVE_PASSWORD" == true ]] || fail "the secret KAI_KEYSTORE_PASSWORD is not set"
+          [[ -n "$KAI_KEY_ALIAS" ]] || fail "the repository variable KAI_KEY_ALIAS is not set"
+          cert="$(tr -d ':[:space:]' <<<"$KAI_SIGNING_CERT_SHA256")"
+          [[ "$cert" =~ ^[0-9A-Fa-f]{64}$ ]] \
+            || fail "the repository variable KAI_SIGNING_CERT_SHA256 is unset or no SHA-256 (64 hex digits): the release certificate to pin"
+
+      # The runner's preinstalled toolchains are some 30 GB the build does not need; the image, the
+      # core's targets and Gradle's caches do.
+      - name: Free runner disk
+        run: |
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL
+          df -h /
+
+      # Before the signing step comes into play: the image's build runs nothing of the repository's.
+      - name: Build the image (ci/Containerfile)
+        run: bash scripts/github-container.sh true
+
+      # No secret, no variable of the signing, no keystore in this step or its container: the build
+      # runs third-party code. The output is app-release-unsigned.apk.
+      - name: Build the unsigned release APK
+        env:
+          KAI_PUBLIC_RELEASE: "1"
+        run: bash scripts/github-container.sh just apk-release
+
+      # The only step with the signing secrets, and it runs no code of the repository's build: the
+      # script is the tag's own, the container has no network and mounts the keystore and the one
+      # APK. No `set -x`: nothing below may print the keystore. The trap deletes the decoded copy
+      # when this step's shell exits, success or failure.
+      - name: Sign the APK (apksigner, no network)
+        env:
+          KAI_KEYSTORE_B64: ${{ secrets.KAI_KEYSTORE_B64 }}
+          KAI_KEYSTORE_PASSWORD: ${{ secrets.KAI_KEYSTORE_PASSWORD }}
+          KAI_KEY_PASSWORD: ${{ secrets.KAI_KEY_PASSWORD }}
+          KAI_KEY_ALIAS: ${{ vars.KAI_KEY_ALIAS }}
+        run: |
+          unsigned=android/app/build/outputs/apk/release/app-release-unsigned.apk
+          [[ -f "$unsigned" && ! -L "$unsigned" ]] || { echo "::error::the build left no plain file $unsigned"; exit 1; }
+          dir="$(mktemp -d "$RUNNER_TEMP/kai-keystore.XXXXXX")"
+          trap 'rm -rf "$dir"' EXIT
+          chmod 700 "$dir"
+          if ! printf '%s' "$KAI_KEYSTORE_B64" | base64 -d > "$dir/release.p12" 2>/dev/null || [[ ! -s "$dir/release.p12" ]]; then
+            echo "::error::KAI_KEYSTORE_B64 does not hold valid base64 (create it with: base64 -w0 release.p12)"
+            exit 1
+          fi
+          export KAI_KEYSTORE_FILE="$dir/release.p12"
+          bash scripts/github-sign.sh "$unsigned" signed/app-release.apk
+
+      # No secret here. The signature must verify, the certificate must be the pinned one, and the
+      # version and the alignment are the ones the release promises.
+      - name: Verify the signed APK
+        env:
+          KAI_EXPECT_VERSION_NAME: ${{ steps.version.outputs.version }}
+          KAI_EXPECT_VERSION_CODE: ${{ steps.version.outputs.code }}
+          KAI_EXPECT_SIGNED: "1"
+          KAI_EXPECT_CERT_SHA256: ${{ vars.KAI_SIGNING_CERT_SHA256 }}
+        run: bash scripts/github-container.sh just verify-apk signed/app-release.apk
+
+      # Exactly the APK and the checksum file; publish checks them again.
+      - name: Stage the release files
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          mkdir release
+          cp signed/app-release.apk "release/kai-mobile-${VERSION}.apk"
+          (cd release && sha256sum "kai-mobile-${VERSION}.apk" > SHA256SUMS && cat SHA256SUMS)
+      - uses: actions/upload-artifact@v7
+        with:
+          name: release
+          path: release/
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    name: Publish
+    needs: build
+    if: github.repository == 'lmgw-dev/kai-mobile'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # create the release, upload assets
+    timeout-minutes: 15
+    env:
+      GH_REPO: ${{ github.repository }}
+      TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+    # No checkout and nothing from the build but the two files: this job runs only the steps below,
+    # with the runner's own gh and sha256sum.
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: release
+          path: release
+
+      - name: Check the build against the tag
+        id: manifest
+        run: |
+          fail() { echo "::error::$*"; exit 1; }
+          [[ "$TAG" =~ ^v([0-9]+\.[0-9]+\.[0-9]+)$ ]] || fail "$TAG is no v<X.Y.Z> tag"
+          version="${BASH_REMATCH[1]}"
+          apk="kai-mobile-${version}.apk"
+          files="$(cd release && find . -mindepth 1 -printf '%P\n' | LC_ALL=C sort)"
+          [[ "$files" == "$(printf '%s\n' "$apk" SHA256SUMS | LC_ALL=C sort)" ]] \
+            || fail "the build handed on other files than $apk and SHA256SUMS: $files"
+          [[ -f "release/$apk" && ! -L "release/$apk" ]] || fail "$apk is not a plain file"
+          [[ -f release/SHA256SUMS && ! -L release/SHA256SUMS ]] || fail "SHA256SUMS is not a plain file"
+          [[ "$(cat release/SHA256SUMS)" =~ ^[0-9a-f]{64}\ \ ${apk//./\\.}$ ]] \
+            || fail "SHA256SUMS is not one line for $apk"
+          (cd release && sha256sum --check --strict SHA256SUMS) || fail "$apk does not match SHA256SUMS"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "apk=$apk" >> "$GITHUB_OUTPUT"
+
+      - name: Publish release v${{ steps.manifest.outputs.version }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.manifest.outputs.version }}
+          APK: ${{ steps.manifest.outputs.apk }}
+        run: |
+          tag="v${VERSION}"
+          dist=release
+          # A re-run of this tag: what is there already. gh release view finds no draft by its tag,
+          # so ask the API (it lists drafts to a token that can write).
+          existing="$(gh api --paginate "repos/${GH_REPO}/releases" \
+            --jq ".[] | select(.tag_name == \"${tag}\") | \"\(.id) \(.draft)\"")"
+          if grep -q ' false$' <<<"$existing"; then
+            echo "::error::release ${tag} is published already; a published release's assets are not replaced (delete the release by hand to release the tag again)"
+            exit 1
+          fi
+          # Only drafts are left (a failed upload leaves one): drop them, the create below makes
+          # the release again with both files. The tag stays.
+          while read -r id _; do
+            [[ -n "$id" ]] || continue
+            gh api -X DELETE "repos/${GH_REPO}/releases/${id}"
+          done <<<"$existing"
+          # The notes are the annotated tag's message (asked of the API: this job has no
+          # checkout), unwrapped to one line per paragraph: GitHub shows every line break. A
+          # lightweight tag gets GitHub's generated notes instead.
+          unwrap="$RUNNER_TEMP/unwrap-notes.awk"
+          cat > "$unwrap" <<'AWK'
+          function flush() {
+              if (buf != "") print buf
+              buf = ""
+          }
+          /^[[:space:]]*```/ { flush(); print; fence = !fence; next }
+          fence { print; next }
+          /^[[:space:]]*$/ { flush(); print ""; next }
+          /^[[:space:]]*(#|>|\|)/ { flush(); print; next }
+          /^[[:space:]]*([-*+]|[0-9]+[.)])[[:space:]]/ { flush(); buf = $0; next }
+          {
+              if (buf == "") { buf = $0; next }
+              line = $0
+              sub(/^[[:space:]]+/, "", line)
+              buf = buf " " line
+          }
+          END { flush() }
+          AWK
+          ref="$(gh api "repos/${GH_REPO}/git/ref/tags/${tag}" --jq '.object.type + " " + .object.sha')"
+          notes=""
+          if [[ "$ref" == "tag "* ]]; then
+            notes="$(gh api "repos/${GH_REPO}/git/tags/${ref#tag }" --jq .message | awk -f "$unwrap")"
+          fi
+          if [[ -n "${notes//[[:space:]]/}" ]]; then
+            notes_args=(--notes "$notes")
+          else
+            notes_args=(--generate-notes)
+          fi
+          # With assets, gh creates a draft, uploads, then publishes: the release never appears
+          # without both files.
+          gh release create "$tag" "$dist/${APK}" "$dist/SHA256SUMS" \
+            --title "Kai mobile ${VERSION}" \
+            "${notes_args[@]}" \
+            --verify-tag \
+            --latest

@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Kai as the digital assistant (design §9.1). No lock-screen use (§9.6) and no local interaction;
+     the class names are the namespace's, whatever the application id. -->
+<voice-interaction-service xmlns:android="http://schemas.android.com/apk/res/android"
+    android:recognitionService="dev.rootshell.kai.assist.KaiRecognitionService"
+    android:sessionService="dev.rootshell.kai.assist.KaiSessionService"
+    android:settingsActivity="dev.rootshell.kai.MainActivity"
+    android:supportsAssist="true"
+    android:supportsLaunchVoiceAssistFromKeyguard="false"
+    android:supportsLocalInteraction="false" />

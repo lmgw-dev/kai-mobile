@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Design §9.1, with the spike's classes. -->
+<voice-interaction-service xmlns:android="http://schemas.android.com/apk/res/android"
+    android:recognitionService="dev.rootshell.kai.spike.assist.SpikeRecognitionService"
+    android:sessionService="dev.rootshell.kai.spike.assist.SpikeSessionService"
+    android:settingsActivity="dev.rootshell.kai.spike.SpikeActivity"
+    android:supportsAssist="true"
+    android:supportsLaunchVoiceAssistFromKeyguard="false"
+    android:supportsLocalInteraction="false" />

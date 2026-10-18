@@ -1,0 +1,18 @@
+# Device link D15 (design M2, M7): every lmgw-facing client is built from the one pinned
+# configuration by link::tls::Tls. A default reqwest client would verify with
+# rustls-platform-verifier, which panics on Android (never initialised there), and take a trust
+# decision of its own besides; building one anywhere else is refused here.
+#
+# reqwest::ClientBuilder is banned as a type, which refuses `ClientBuilder::default()` with every
+# other way to a builder outside link::tls::builder. `reqwest::Client::default()` cannot be named
+# here: clippy resolves no trait impl's method ("does not refer to a reachable function", clippy
+# 0.1.98), so link::tls's test `no_source_builds_a_default_reqwest_client` refuses it in the sources.
+disallowed-methods = [
+    { path = "reqwest::Client::new", reason = "lmgw's connections come from link::tls::Tls (device link D15)" },
+    { path = "reqwest::Client::builder", reason = "lmgw's connections come from link::tls::Tls (device link D15)" },
+    { path = "reqwest::ClientBuilder::new", reason = "lmgw's connections come from link::tls::Tls (device link D15)" },
+    { path = "reqwest::get", reason = "lmgw's connections come from link::tls::Tls (device link D15)" },
+]
+disallowed-types = [
+    { path = "reqwest::ClientBuilder", reason = "lmgw's connections come from link::tls::Tls (device link D15)" },
+]

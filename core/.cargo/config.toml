@@ -1,0 +1,8 @@
+# Android targets only (design §2.1). Flags for a target go here, never into RUSTFLAGS in the
+# environment: that variable replaces the configured flags of every target and changes the
+# fingerprints. NDK r28 and newer link every library 16 KB page aligned by default, and cargo-ndk
+# supplies the NDK's linker and sysroot, so there is nothing to add today; a flag a target needs
+# lands under its table below.
+#
+# [target.aarch64-linux-android]
+# [target.x86_64-linux-android]

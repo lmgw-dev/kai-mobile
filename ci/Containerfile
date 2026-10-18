@@ -1,0 +1,84 @@
+# The Android build image of Kai mobile (design §15.1): JDK 21, the Android command-line tools, the
+# platform and build tools of the target API level, the NDK, rustup with both Android targets,
+# cargo-ndk, just and nextest. Every version is pinned here; the image is tagged with a hash of this
+# file (scripts/in-container.sh), so a changed pin rebuilds it and nothing else does.
+#
+# Built locally with Podman (`just image`), by CI as the project's registry image (.gitlab-ci.yml).
+FROM registry.fedoraproject.org/fedora:43
+
+# Host-side packages. java-21-openjdk-devel is the Gradle toolchain (Fedora 44 ships only JDK 25, so
+# the image is Fedora 43, whose repositories still carry 21);
+# gcc and make build the core's host tests (ring) and cargo-ndk; git, tar and unzip serve the
+# scripts; zip and findutils the alignment checks; python3 for the scripts' small JSON reads.
+RUN dnf -y install java-21-openjdk-devel git gcc gcc-c++ make perl-FindBin perl-File-Compare \
+        curl ca-certificates tar gzip xz unzip zip findutils which python3 \
+    && dnf clean all
+
+# --- Android SDK -----------------------------------------------------------------------------
+# cmdline-tools 23.0 (repository2-3.xml, stable channel; the checksum is Google's sha1).
+ARG CMDLINE_TOOLS_ZIP=commandlinetools-linux-16111833_latest.zip
+ARG CMDLINE_TOOLS_SHA1=e025545c62a8e64c7559119566a569fb1dec5f60
+# API level 37 (Android 17, platform "37.0") is the newest stable one (M15); the build tools,
+# platform and NDK are the stable channel's newest of 2026-10-14. NDK r29 aligns every library to
+# 16 KB pages by default (§2.1).
+ARG ANDROID_PLATFORM=platforms;android-37.0
+ARG ANDROID_BUILD_TOOLS=build-tools;37.0.0
+ARG ANDROID_NDK=ndk;29.0.14206865
+ENV ANDROID_HOME=/opt/android-sdk \
+    ANDROID_SDK_ROOT=/opt/android-sdk
+RUN mkdir -p "$ANDROID_HOME/cmdline-tools" /tmp/cmdline \
+    && curl -fsSL -o /tmp/cmdline.zip "https://dl.google.com/android/repository/$CMDLINE_TOOLS_ZIP" \
+    && echo "$CMDLINE_TOOLS_SHA1  /tmp/cmdline.zip" | sha1sum -c - \
+    && unzip -q /tmp/cmdline.zip -d /tmp/cmdline \
+    && mv /tmp/cmdline/cmdline-tools "$ANDROID_HOME/cmdline-tools/latest" \
+    && rm -rf /tmp/cmdline /tmp/cmdline.zip
+ENV PATH="$ANDROID_HOME/cmdline-tools/latest/bin:$PATH"
+RUN yes | sdkmanager --licenses >/dev/null \
+    && sdkmanager "$ANDROID_PLATFORM" "$ANDROID_BUILD_TOOLS" "$ANDROID_NDK" \
+    && sdkmanager --list_installed
+# The build user (rootless Podman with --userns=keep-id) is not root: Gradle may write into the SDK
+# (its package list, the NDK's metadata).
+RUN chmod -R a+rwX "$ANDROID_HOME"
+ENV ANDROID_NDK_HOME=/opt/android-sdk/ndk/29.0.14206865
+
+# --- Rust --------------------------------------------------------------------------------------
+# rustup 1.29.0 (sha256 of the x86_64 binary) and the stable toolchain the host builds with.
+ARG RUSTUP_VERSION=1.29.0
+ARG RUSTUP_SHA256=4acc9acc76d5079515b46346a485974457b5a79893cfb01112423c89aeb5aa10
+ARG RUST_TOOLCHAIN=1.98.1
+ENV RUSTUP_HOME=/opt/rustup \
+    CARGO_HOME=/opt/cargo
+ENV PATH="/opt/cargo/bin:$PATH"
+RUN curl -fsSL -o /tmp/rustup-init "https://static.rust-lang.org/rustup/archive/$RUSTUP_VERSION/x86_64-unknown-linux-gnu/rustup-init" \
+    && echo "$RUSTUP_SHA256  /tmp/rustup-init" | sha256sum -c - \
+    && chmod +x /tmp/rustup-init \
+    && /tmp/rustup-init -y --no-modify-path --profile minimal --default-toolchain "$RUST_TOOLCHAIN" \
+        -c clippy -c rustfmt -t aarch64-linux-android -t x86_64-linux-android \
+    && rm /tmp/rustup-init \
+    && chmod -R a+rX /opt/rustup /opt/cargo
+
+# cargo-ndk builds the core for the NDK's targets; installed into /usr/local, not into the
+# CARGO_HOME that a run mounts as its cache.
+ARG CARGO_NDK_VERSION=4.1.2
+RUN CARGO_BUILD_JOBS=6 cargo install --locked --root /usr/local --version "$CARGO_NDK_VERSION" cargo-ndk \
+    && rm -rf /opt/cargo/registry /opt/cargo/git
+
+# just and nextest: the releases' binaries, by checksum.
+ARG JUST_VERSION=1.58.0
+ARG JUST_SHA256=4a5cc2f53e6f0f8c59092a6cc38291eb729d46a7dd95d3ae582008881b84931d
+ARG NEXTEST_VERSION=0.9.148
+ARG NEXTEST_SHA256=223ba936714cc861a9cdedad5a8eb664dfdd69d6fbdf6cea6aa8184f523290dc
+RUN curl -fsSL -o /tmp/just.tgz "https://github.com/casey/just/releases/download/$JUST_VERSION/just-$JUST_VERSION-x86_64-unknown-linux-musl.tar.gz" \
+    && echo "$JUST_SHA256  /tmp/just.tgz" | sha256sum -c - \
+    && tar -xzf /tmp/just.tgz -C /usr/local/bin just \
+    && curl -fsSL -o /tmp/nextest.tgz "https://github.com/nextest-rs/nextest/releases/download/cargo-nextest-$NEXTEST_VERSION/cargo-nextest-$NEXTEST_VERSION-x86_64-unknown-linux-gnu.tar.gz" \
+    && echo "$NEXTEST_SHA256  /tmp/nextest.tgz" | sha256sum -c - \
+    && tar -xzf /tmp/nextest.tgz -C /usr/local/bin cargo-nextest \
+    && rm /tmp/just.tgz /tmp/nextest.tgz
+
+# Runs set GRADLE_USER_HOME, ANDROID_USER_HOME (the debug key), CARGO_HOME and CARGO_TARGET_DIR
+# to the mounted cache; the work tree is mounted at /src/kai-mobile.
+WORKDIR /src/kai-mobile
+
+# Scripts that run a command "in the image" see this and run it directly (scripts/in-container.sh).
+ENV KAI_BUILD_IMAGE=1

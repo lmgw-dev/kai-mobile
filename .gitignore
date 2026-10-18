@@ -1,0 +1,29 @@
+# Rust
+core/target/
+# The pinned lmgw crates the container build stages from LMGW_PIN's tree (scripts/lmgw-pin.sh stage)
+.stage/
+# Gradle and Android Studio
+android/.gradle/
+android/.kotlin/
+android/build/
+android/app/build/
+android/local.properties
+android/.idea/
+*.iml
+# Never in the repository: signing material
+*.jks
+*.keystore
+*.p12
+# Raw spike data and the spike's Gradle output
+spikes/*/results/
+spikes/*/shots/
+spikes/*/app/build/
+spikes/*/app/.gradle/
+# CI caches
+.cache/
+dist/
+.android/
+# (AGP drops its analytics settings into .android/ at the repository root whatever ANDROID_USER_HOME says; ANDROID_PREFS_ROOT breaks AGP 9.4.1 here, so it is ignored instead)
+.kotlin/
+/target/
+# (target/publish/ holds scripts/publish-github.sh's audit files and approvals, target/lmgw-public.git its fetch of lmgw's release)

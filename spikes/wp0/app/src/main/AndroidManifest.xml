@@ -1,0 +1,102 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- WP0's device spike (Kai mobile design §17). Spike-only permissions are marked; the rest are
+     the ones the design gives Kai (§8.6, §9.1, §12.1). -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <!-- Spike-only: the Wi-Fi link's RSSI beside (b)'s ping, and whether (i)'s Bluetooth device
+         names need BLUETOOTH_CONNECT (design §8.3). -->
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+
+    <!-- (o): whether Google's services are installed. -->
+    <queries>
+        <package android:name="com.google.android.gms" />
+    </queries>
+
+    <application
+        android:name=".SpikeApp"
+        android:allowBackup="false"
+        android:enableOnBackInvokedCallback="true"
+        android:icon="@mipmap/ic_spike"
+        android:label="@string/app_name"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.Spike"
+        tools:ignore="UnusedAttribute">
+
+        <!-- Fully resizable, no configChanges (design §10.6): a fold recreates it, as (n) needs.
+             ASSIST and VOICE_COMMAND only log their arrival (design §9.1, §9.4). -->
+        <activity
+            android:name=".SpikeActivity"
+            android:exported="true"
+            android:windowSoftInputMode="adjustResize">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.ASSIST" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.VOICE_COMMAND" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+        </activity>
+
+        <!-- (a): the assistant (design §9.1). -->
+        <service
+            android:name=".assist.SpikeInteractionService"
+            android:exported="true"
+            android:label="@string/app_name"
+            android:permission="android.permission.BIND_VOICE_INTERACTION">
+            <meta-data
+                android:name="android.voice_interaction"
+                android:resource="@xml/voice_interaction" />
+            <intent-filter>
+                <action android:name="android.service.voice.VoiceInteractionService" />
+            </intent-filter>
+        </service>
+        <service
+            android:name=".assist.SpikeSessionService"
+            android:exported="true"
+            android:permission="android.permission.BIND_VOICE_INTERACTION" />
+        <service
+            android:name=".assist.SpikeRecognitionService"
+            android:exported="true"
+            android:label="@string/app_name">
+            <meta-data
+                android:name="android.speech"
+                android:resource="@xml/recognition_service" />
+            <intent-filter>
+                <action android:name="android.speech.RecognitionService" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+        </service>
+
+        <!-- (b), (n): Kai's service (design §8.6, §12.1), specialUse with the microphone type
+             added for a capture and dropped after it. -->
+        <service
+            android:name=".service.SpikeService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse|microphone">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Holds the connection to the owner's own lmgw gateway, which delivers its notifications (replies, approvals)" />
+        </service>
+
+        <!-- (e): every run in a fresh process, so the first call and the first signature are cold. -->
+        <service
+            android:name=".probe.FfiProbeService"
+            android:exported="false"
+            android:process=":ffiprobe" />
+    </application>
+</manifest>

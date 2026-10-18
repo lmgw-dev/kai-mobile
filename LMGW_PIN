@@ -1,0 +1,12 @@
+# The lmgw source Kai mobile is built and tested against, in Kai's three-line form (the desktop Kai's
+# LMGW_PIN documents the fields in full; scripts/lmgw-pin.sh reads them):
+#   lmgw_commit  the commit in lmgw's development history (the checkout next to this repository,
+#                GitLab CI's clone); `just check` warns (never fails) when that checkout is at another
+#                commit or has changes
+#   lmgw_tag     the published lmgw release whose tree is lmgw_tree, or `unpublished` while no release
+#                has that tree yet; GitLab's builds never depend on it
+#   lmgw_tree    the commit's tree: what the container build stages lmgw-client and lmgw-api-types from
+#                (`git archive`), so the APK is the same whatever the checkout holds
+lmgw_commit abab6ae58f51f48eb976f78f4d53723dec3b957c
+lmgw_tag v0.5.0
+lmgw_tree bcac5aef6d0155433983c88b19030ed9c3f4e3c9

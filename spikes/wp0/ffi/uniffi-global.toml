@@ -1,0 +1,9 @@
+# UniFFI's global configuration for the spike's library (just spike-core): libkai_wp0_spike.so
+# carries kai-mobile-core and the spike crate, so both crates' Kotlin bindings load that library;
+# the core keeps its own package, the spike's exports get a package of their own.
+[crates.kai_mobile_core.bindings.kotlin]
+cdylib_name = "kai_wp0_spike"
+
+[crates.kai_wp0_spike.bindings.kotlin]
+package_name = "dev.rootshell.kai.spike.ffi"
+cdylib_name = "kai_wp0_spike"

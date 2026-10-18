@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The launcher shortcut "Talk" (design §9.4): the voice screen with a call, through TalkActivity,
+     which is not exported (the launcher starts a shortcut as this app). One file per build type:
+     the target package is the application id, which the debug build suffixes with .dev. -->
+<shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
+    <shortcut
+        android:enabled="true"
+        android:icon="@mipmap/ic_launcher"
+        android:shortcutId="talk"
+        android:shortcutLongLabel="@string/shortcut_talk_long"
+        android:shortcutShortLabel="@string/shortcut_talk_short">
+        <intent
+            android:action="dev.rootshell.kai.action.TALK_TO_KAI"
+            android:targetClass="dev.rootshell.kai.TalkActivity"
+            android:targetPackage="dev.rootshell.kai" />
+    </shortcut>
+</shortcuts>

@@ -1,0 +1,169 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <!-- The device link and the held feed (design §4, §12): the network, the default network's
+         callback, Kai's specialUse service (started at boot too), its notifications, the battery
+         exemption setup asks for (§9.5), and the scanner's camera (asked when it opens, §4.1).
+         Voice (§7, §8.6): the microphone (asked at the first Talk), the microphone type on Kai's
+         service during a call, the call's audio mode and device, the cue's haptic tick. -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+    <uses-permission android:name="android.permission.CAMERA" />
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
+    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
+    <uses-permission android:name="android.permission.VIBRATE" />
+
+    <uses-feature android:name="android.hardware.camera.any" android:required="false" />
+    <uses-feature android:name="android.hardware.microphone" android:required="false" />
+
+    <!-- Open WireGuard (design §5.3). -->
+    <queries>
+        <package android:name="com.wireguard.android" />
+    </queries>
+
+    <application
+        android:name=".KaiApplication"
+        android:allowBackup="false"
+        android:dataExtractionRules="@xml/data_extraction_rules"
+        android:enableOnBackInvokedCallback="true"
+        tools:ignore="UnusedAttribute"
+        android:icon="@mipmap/ic_launcher"
+        android:label="@string/app_name"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.Kai"
+        android:usesCleartextTraffic="false">
+
+        <!-- Fully resizable: no screenOrientation, no resizeableActivity=false, no aspect limits,
+             no configChanges (design §10.6). A fold or unfold recreates the activity; nothing
+             lives in it. singleTop: a tapped link or notification reaches the running one. A
+             tapped lmgw-pair: link only ever leads to the pairing's confirmation (§4.1); ASSIST and
+             VOICE_COMMAND (where the system or a headset sends them instead of showing the
+             assistant's overlay, §9.1, §9.4) open the voice screen and start no call (the owner
+             taps Talk: an exported filter never makes Kai listen). The launcher
+             shortcut "Talk" (§9.4) goes through TalkActivity. -->
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:launchMode="singleTop"
+            android:windowSoftInputMode="adjustResize">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="lmgw-pair" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.ASSIST" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.VOICE_COMMAND" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+            <meta-data
+                android:name="android.app.shortcuts"
+                android:resource="@xml/shortcuts" />
+        </activity>
+
+        <!-- "Talk to Kai" from the tile, the shortcut and the overlay (design §9.4): not exported, it
+             draws nothing and hands over to MainActivity's voice screen. It shows over the lock
+             screen only to ask for the unlock (§9.6): nothing starts or shows before it. A task of
+             its own (no affinity), so it never becomes the root of Kai's task, which would take
+             Kai out of Recents. -->
+        <activity
+            android:name=".TalkActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:showWhenLocked="true"
+            android:taskAffinity=""
+            android:theme="@android:style/Theme.Translucent.NoTitleBar" />
+
+        <!-- A notification's tap and Talk (design §12.3): not exported, so the tag it carries comes
+             from Kai's own PendingIntents only; it draws nothing and hands over to MainActivity. -->
+        <activity
+            android:name=".NotificationTapActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:theme="@android:style/Theme.NoDisplay" />
+
+        <!-- Kai's service (design M16, §8.6, §12.1): holds the feed while paired, and a call's
+             microphone while one runs. specialUse from Android 14; on 12 and 13 that flag is
+             ignored and the service runs untyped between calls. -->
+        <service
+            android:name=".service.KaiService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse|microphone">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Holds the connection to the owner's own lmgw gateway, which delivers its notifications (replies, approvals)" />
+        </service>
+
+        <!-- Assistant mode (design §9.1): the interaction service the system binds while Kai holds
+             the assistant role, its session (the overlay, §9.2), and the stub recogniser AOSP
+             requires beside it, which answers every request with an error. The recogniser is
+             exported without a permission as recognisers are (apps bind it through
+             SpeechRecognizer); it reads nothing and records nothing. -->
+        <service
+            android:name=".assist.KaiInteractionService"
+            android:exported="true"
+            android:label="@string/app_name"
+            android:permission="android.permission.BIND_VOICE_INTERACTION">
+            <meta-data
+                android:name="android.voice_interaction"
+                android:resource="@xml/voice_interaction" />
+            <intent-filter>
+                <action android:name="android.service.voice.VoiceInteractionService" />
+            </intent-filter>
+        </service>
+        <service
+            android:name=".assist.KaiSessionService"
+            android:exported="true"
+            android:permission="android.permission.BIND_VOICE_INTERACTION" />
+        <service
+            android:name=".assist.KaiRecognitionService"
+            android:exported="true"
+            android:label="@string/app_name"
+            tools:ignore="ExportedService">
+            <meta-data
+                android:name="android.speech"
+                android:resource="@xml/recognition_service" />
+            <intent-filter>
+                <action android:name="android.speech.RecognitionService" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+        </service>
+
+        <!-- The Quick Settings tile "Talk to Kai" (design §9.4). -->
+        <service
+            android:name=".assist.TalkTileService"
+            android:exported="true"
+            android:icon="@drawable/ic_notification"
+            android:label="@string/tile_talk"
+            android:permission="android.permission.BIND_QUICK_SETTINGS_TILE">
+            <intent-filter>
+                <action android:name="android.service.quicksettings.action.QS_TILE" />
+            </intent-filter>
+        </service>
+
+        <receiver android:name=".app.NotificationActionReceiver" android:exported="false" />
+        <receiver android:name=".app.WakeReceiver" android:exported="false" />
+        <receiver android:name=".app.BootReceiver" android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
+        </receiver>
+    </application>
+</manifest>

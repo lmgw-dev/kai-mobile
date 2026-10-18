@@ -1,0 +1,65 @@
+# Kai mobile's Rust workspace (design M1, §2, §3): the UniFFI core and the bindgen binary at the same
+# uniffi version. lmgw-client and lmgw-api-types come by path from lmgw's checkout next to this
+# repository (`../../lmgw` from here); the container build stages them from LMGW_PIN's tree
+# (scripts/in-container.sh) at the same relative place, so this file is the same everywhere.
+[workspace]
+resolver = "2"
+# The WP0 device spike's FFI crate lives with the spike (spikes/wp0/ffi) and is a member so that
+# `just check` holds it to the same gates; the real core never depends on it.
+members = ["kai-mobile-core", "uniffi-bindgen", "../spikes/wp0/ffi"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+publish = false
+
+[workspace.dependencies]
+lmgw-client = { path = "../../lmgw/crates/lmgw-client", features = ["tls"] }
+lmgw-api-types = { path = "../../lmgw/crates/lmgw-api-types" }
+uniffi = { version = "0.32.2", features = ["tokio"] }
+tokio = { version = "1", default-features = false, features = ["rt-multi-thread", "time", "sync", "macros", "fs"] }
+# M7: the ring provider and no aws-lc-rs. reqwest's `rustls-no-provider` brings no provider; the
+# pinned configuration is handed to it whole (link::tls).
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider", "stream", "multipart"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", default-features = false, features = ["registry", "std"] }
+arc-swap = "1"
+# The URL race (link::race): its attempts in one FuturesUnordered, and the layer on reqwest's connector
+# that says when an attempt's connection is up; reqwest's own tower crates, already in the tree.
+futures-util = { version = "0.3", default-features = false, features = ["std"] }
+tower-layer = "0.3"
+tower-service = "0.3"
+# CLOCK_BOOTTIME, the clock the core's deadlines count on (design §12.2): it keeps counting while
+# the phone sleeps.
+libc = "0.2"
+# SHA-256 (a pairing's identity, the token a pending key is kept for) and the Keystore alias's
+# random part; the provider's own crate.
+ring = "0.17"
+# The messages' Markdown (design M14), parsed in the core: no HTML renderer, no binary.
+pulldown-cmark = { version = "0.13", default-features = false }
+# The tests' device listener (link::test_pki): rcgen makes its certificates, tokio-rustls serves.
+rcgen = { version = "0.14.10", default-features = false, features = ["ring"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring"] }
+
+# M4: panic = "unwind" in every profile, so a panic becomes a Kotlin exception instead of killing
+# the app. Release (§2.2): opt-level 3, thin LTO, one codegen unit.
+[profile.dev]
+panic = "unwind"
+# Line tables only: the debug library is 10 times smaller than with full DWARF, which is what
+# a debug APK carries before AGP strips it.
+debug = "line-tables-only"
+
+# Line tables, not stripped: AGP strips the packaged copy anyway (the APK does not grow), and the
+# unstripped library CI keeps as an artifact gives ndk-stack file:line.
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+panic = "unwind"
+debug = "line-tables-only"
+strip = "none"

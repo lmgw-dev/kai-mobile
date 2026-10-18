@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- A ring with a bar across it: Kai's ring, marked as the spike. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M54,32a22,22 0,1 1,0 44a22,22 0,1 1,0 -44z"
+        android:strokeWidth="6"
+        android:strokeColor="#FF3DAEE9" />
+    <path
+        android:fillColor="@color/spike_icon_mark"
+        android:pathData="M30,51h48v6h-48z" />
+</vector>

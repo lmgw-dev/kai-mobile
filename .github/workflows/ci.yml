@@ -1,0 +1,97 @@
+# The gate for pull requests and pushes to main, on GitHub's own runners: what `just check` runs (the
+# pin warning, the build image's tag, the publish scripts' tests, the core's fmt, clippy, tests and
+# aws-lc check, Gradle's lint and JVM unit tests), in ci/Containerfile's image. No secrets.
+#
+# The image is built by the job itself (scripts/github-container.sh, docker build), not pulled and
+# not cached. GitHub has no registry image of ours to pull: the private CI's lives in a registry
+# of its own, and publishing one from here would need a job with `packages: write` on every run.
+# Caching the built image would take about a third of the repository's 10 GB cache quota (it is
+# 8.7 GB uncompressed), so what is cached is the part that costs more per byte: cargo's registry,
+# Gradle's caches and the core's target directory. The image takes about ten minutes to build.
+#
+# lmgw's crates are path dependencies (core/Cargo.toml: ../../lmgw): the job clones the public lmgw
+# at the release LMGW_PIN names (lmgw_tag) next to this checkout and fails unless its tree is the
+# pinned tree (scripts/lmgw-pin.sh clone-published). With lmgw_tag `unpublished` it fails with a
+# message saying so: a push to main must name a published lmgw release.
+#
+# Never run here: the on-device checks (they need a phone), and the private CI's image-tag job.
+# A run can also be started by hand from the Actions tab.
+name: CI
+
+on:
+  pull_request:
+    paths-ignore: ["**.md", "docs/**", ".gitlab-ci.yml"]
+  push:
+    branches: [main]
+    paths-ignore: ["**.md", "docs/**", ".gitlab-ci.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# A newer push to the same branch / PR supersedes the running check.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  check:
+    name: just check
+    runs-on: ubuntu-latest
+    # A cold run builds the image, the core (host and Android) and Gradle's caches; this bounds what
+    # a hung build can cost.
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: lmgw at the pinned release, next to the checkout
+        run: bash scripts/lmgw-pin.sh clone-published ../lmgw
+
+      # Cargo's registry, Gradle's caches and the core's target directory (ignored paths of the
+      # checkout, where scripts/github-container.sh keeps them), keyed on what they depend on;
+      # a near miss restores the newest older cache. Saved from main only, so a PR restores main's
+      # and adds nothing of its own.
+      - name: Restore caches
+        id: cache
+        uses: actions/cache/restore@v6
+        with:
+          path: |
+            .cache/cargo/registry
+            .cache/cargo/git
+            .cache/gradle/caches
+            .cache/gradle/wrapper
+            core/target
+          key: check-${{ hashFiles('ci/Containerfile', 'core/Cargo.lock', 'android/gradle/verification-metadata.xml', 'android/gradle/libs.versions.toml', 'android/gradle/wrapper/gradle-wrapper.properties') }}
+          restore-keys: check-
+
+      # The runner's preinstalled toolchains are some 30 GB the check does not need; the image
+      # (8.7 GB), the core's targets and Gradle's caches do.
+      - name: Free runner disk
+        run: |
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL
+          df -h /
+
+      - name: Build the image (ci/Containerfile)
+        run: bash scripts/github-container.sh true
+
+      - name: just check
+        run: bash scripts/github-container.sh just check
+
+      # Saved even when a test failed (the compile is the expensive part).
+      - name: Save caches
+        if: ${{ !cancelled() && github.ref == 'refs/heads/main' && steps.cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@v6
+        with:
+          path: |
+            .cache/cargo/registry
+            .cache/cargo/git
+            .cache/gradle/caches
+            .cache/gradle/wrapper
+            core/target
+          key: ${{ steps.cache.outputs.cache-primary-key }}

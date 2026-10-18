@@ -1,0 +1,30 @@
+[package]
+name = "kai-wp0-spike"
+version = "0.1.0"
+workspace = "../../../core"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "WP0's device spike (Kai mobile design §17, point (e)): the real core plus spike-only FFI for the JNA callback, Keystore signature and TLS measurements"
+
+# Spike-only: the spike app (spikes/wp0/app) loads this library, which carries kai-mobile-core
+# whole, so the core's own API gains nothing for the spike. The lib is for the host tests.
+[lib]
+crate-type = ["lib", "cdylib"]
+
+[dependencies]
+kai-mobile-core = { path = "../../../core/kai-mobile-core" }
+# The device link's client configuration, the one WP2 builds every lmgw connection from.
+lmgw-client = { workspace = true, features = ["tls"] }
+uniffi.workspace = true
+tokio.workspace = true
+rustls.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+# The CA, server and device certificates made at runtime (ring only, as lmgw's tests make them).
+rcgen = { version = "0.14.10", default-features = false, features = ["ring"] }
+# Verifies the Keystore's signatures.
+ring = "0.17"
+
+[lints.rust]
+unsafe_op_in_unsafe_fn = "deny"

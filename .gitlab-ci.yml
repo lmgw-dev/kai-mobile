@@ -1,0 +1,154 @@
+# CI for Kai mobile (design §15.1): the build image, a check job and a release-APK build job.
+#
+# Every job runs on the `docker` runner (default tags). The Android toolchain is ci/Containerfile's
+# image, built by the `build-image` job with Buildah and stored in this project's registry as
+# $CI_REGISTRY_IMAGE/build:$KAI_IMAGE_TAG, where KAI_IMAGE_TAG is the first 12 hex digits of the
+# Containerfile's sha256 and is written out below (the jobs' `image:` cannot compute it). `just
+# image-tag-check` (part of `just check`) fails when the two disagree, and the `build-image` job refuses to
+# push under a stale tag: after editing ci/Containerfile, set KAI_IMAGE_TAG to `just image-tag`'s
+# output. The `build-image` job runs in every pipeline on main, and `check` and `build` need it: it logs in
+# and looks the tag up by its manifest alone, so with the image in the registry it costs one manifest
+# lookup and pulls no layers; when the tag is missing (a new Containerfile hash, or an image that was
+# never pushed) it builds and pushes it, and a pipeline started with REBUILD_IMAGE=1 rebuilds it even
+# when present.
+# The check and build jobs run inside the image, so `scripts/in-container.sh` just execs there
+# (KAI_BUILD_IMAGE=1) and the recipes are the ones run locally.
+#
+# lmgw-client and lmgw-api-types are path dependencies (core/Cargo.toml: ../../lmgw): before_script
+# clones lmgw's project (LMGW_PROJECT, its path on this GitLab instance) next to this repository
+# with the job's token, checks out LMGW_PIN's commit and FAILS unless that clone's tree is
+# LMGW_PIN's lmgw_tree. The token reaches lmgw's project only if lmgw's CI/CD settings (Job token
+# permissions) allow this project, as they allow Kai's.
+#
+# CI/CD VARIABLES for the signed release APK (Settings → CI/CD → Variables, protected so that they
+# reach `main`; the maintainer creates the keystore and keeps an offline backup, see README.md).
+# Variable values are text, so the binary keystore is stored base64-encoded:
+#   KAI_KEYSTORE_B64       type File, protected, masked and hidden: the PKCS12 keystore as
+#                          `base64 -w0` (the variable holds the path of a file with that text)
+#   KAI_KEYSTORE_PASSWORD  protected, masked and hidden
+#   KAI_KEY_ALIAS          protected: the key's alias
+#   KAI_KEY_PASSWORD       optional (protected, masked and hidden when set); a PKCS12 keystore
+#                          uses the store password for its key, so leave it unset
+# The build job decodes KAI_KEYSTORE_B64 into a private temp file outside the project directory,
+# exports its path as KAI_KEYSTORE_FILE (what Gradle reads) and deletes it when the job's shell
+# exits. The build job sets KAI_REQUIRE_SIGNING=1: without the keystore it fails instead of
+# producing an unsigned APK, and it runs only after `check` has passed.
+default:
+  tags: [docker]
+
+stages:
+  - image
+  - check
+  - build
+
+workflow:
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main"'
+
+variables:
+  LMGW_PROJECT: "lmgw-dev/lmgw"
+  LMGW_DIR: "$CI_PROJECT_DIR/../lmgw"
+  CARGO_HOME: "$CI_PROJECT_DIR/.cache/cargo"
+  GRADLE_USER_HOME: "$CI_PROJECT_DIR/.cache/gradle"
+  ANDROID_USER_HOME: "$CI_PROJECT_DIR/.cache/android"
+  CARGO_BUILD_JOBS: "6"
+  # sha256(ci/Containerfile)[0:12]; `just image-tag` prints it, `just image-tag-check` verifies it.
+  KAI_IMAGE_TAG: "ca98d20d9832"
+  BUILD_IMAGE: "$CI_REGISTRY_IMAGE/build:$KAI_IMAGE_TAG"
+
+build-image:
+  stage: image
+  image: quay.io/buildah/stable@sha256:df815dc3eaceaf94ae6eb8e9bfa8839b29306b525a3e7064493a1684df8e8ca9 # v1.43.4
+  variables:
+    STORAGE_DRIVER: vfs
+    BUILDAH_ISOLATION: chroot
+  script:
+    # Present-check by manifest only (no layers are pulled). The stable Buildah image ships no skopeo,
+    # and `buildah manifest inspect` accepts only list types: for the single-image manifest this job
+    # pushes it answers "not a list type", which still proves the tag exists; "manifest unknown", "name unknown" or "repository name not known to registry" mean
+    # it does not; any other failure (network, auth, 5xx) fails the job instead of rebuilding blindly.
+    - printf '%s' "$CI_REGISTRY_PASSWORD" | buildah login --username "$CI_REGISTRY_USER" --password-stdin "$CI_REGISTRY"
+    - |
+      if [ -z "${REBUILD_IMAGE:-}" ]; then
+        if out=$(buildah manifest inspect "$BUILD_IMAGE" 2>&1) || case "$out" in *"not a list type"*) true ;; *) false ;; esac; then
+          echo "$BUILD_IMAGE is present; nothing to build."
+          exit 0
+        fi
+        case "$out" in
+          *"manifest unknown"*|*"name unknown"*|*"repository name not known to registry"*) echo "$BUILD_IMAGE is missing: building it." ;;
+          *) echo "$out" >&2; echo "cannot tell whether $BUILD_IMAGE exists" >&2; exit 1 ;;
+        esac
+      fi
+    - hash=$(sha256sum ci/Containerfile | cut -c1-12)
+    - '[ "$hash" = "$KAI_IMAGE_TAG" ] || { echo "KAI_IMAGE_TAG is $KAI_IMAGE_TAG but ci/Containerfile hashes to $hash: update it in .gitlab-ci.yml" >&2; exit 1; }'
+    - buildah build --isolation chroot --file ci/Containerfile --tag "$BUILD_IMAGE" ci
+    - buildah push "$BUILD_IMAGE"
+
+.in_image:
+  image: $BUILD_IMAGE
+  interruptible: true
+  before_script:
+    - rm -rf "$LMGW_DIR"
+    - git clone --quiet --filter=blob:none --no-checkout
+        "${CI_SERVER_PROTOCOL}://gitlab-ci-token:${CI_JOB_TOKEN}@${CI_SERVER_HOST}:${CI_SERVER_PORT}/${LMGW_PROJECT}.git" "$LMGW_DIR"
+    - git -C "$LMGW_DIR" checkout --quiet --detach "$(scripts/lmgw-pin.sh commit)"
+    - scripts/lmgw-pin.sh verify-tree "$LMGW_DIR"
+
+# What `just check` runs locally: the pin warning, the image tag, the core's fmt, clippy, nextest and
+# doc tests and the aws-lc check on the host, Gradle's lint and JVM unit tests.
+check:
+  extends: .in_image
+  stage: check
+  needs: [build-image]
+  cache:
+    key: kai-mobile-check
+    paths:
+      - .cache/cargo/registry/
+      - .cache/gradle/caches/
+      - .cache/gradle/wrapper/
+      - core/target/
+  script:
+    - just check
+
+# The signed release APK (arm64-v8a), versionCode the pipeline's IID (design §2.2). That artifact is
+# installable as it is: it is installable as it is, for testers without a build setup. The core's unstripped
+# library is kept for ndk-stack. It builds only when `check` has passed.
+build:
+  extends: .in_image
+  stage: build
+  needs:
+    - check
+    - build-image
+  cache:
+    key: kai-mobile-build
+    paths:
+      - .cache/cargo/registry/
+      - .cache/gradle/caches/
+      - .cache/gradle/wrapper/
+      - core/target/
+  variables:
+    KAI_REQUIRE_SIGNING: "1"
+  script:
+    # No `set -x` here: nothing below may print the keystore. A trap (not after_script, which runs in
+    # a separate shell) deletes the decoded copy when this shell exits, success or failure.
+    - |
+      if [ -n "${KAI_KEYSTORE_B64:-}" ]; then
+        keystore_tmp=$(mktemp "${TMPDIR:-/tmp}/kai-keystore.XXXXXX")
+        trap 'rm -f "$keystore_tmp"' EXIT
+        chmod 600 "$keystore_tmp"
+        if ! base64 -d "$KAI_KEYSTORE_B64" > "$keystore_tmp" 2>/dev/null || [ ! -s "$keystore_tmp" ]; then
+          echo "KAI_KEYSTORE_B64 does not hold valid base64 (create it with: base64 -w0 release.p12)" >&2
+          exit 1
+        fi
+        export KAI_KEYSTORE_FILE="$keystore_tmp"
+      fi
+    - export KAI_VERSION_CODE="$CI_PIPELINE_IID"
+    - just apk-release
+    - just verify-apk android/app/build/outputs/apk/release/app-release.apk
+    - mkdir -p dist
+    - cp android/app/build/outputs/apk/release/app-release.apk "dist/kai-mobile-$CI_PIPELINE_IID.apk"
+    - cp core/target/aarch64-linux-android/release/libkai_mobile_core.so dist/libkai_mobile_core-unstripped.so
+  artifacts:
+    paths:
+      - dist/
+    expire_in: 4 weeks

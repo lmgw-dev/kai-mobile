@@ -1,0 +1,44 @@
+[package]
+name = "kai-mobile-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Kai mobile's Rust core: lmgw's protocol and I/O behind a Kai-shaped API, exported to Kotlin through UniFFI"
+
+# The lib is for host tests, the cdylib for Android (libkai_mobile_core.so).
+[lib]
+crate-type = ["lib", "cdylib"]
+
+[dependencies]
+lmgw-client.workspace = true
+lmgw-api-types.workspace = true
+uniffi.workspace = true
+tokio.workspace = true
+rustls.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+arc-swap.workspace = true
+futures-util.workspace = true
+tower-layer.workspace = true
+tower-service.workspace = true
+libc.workspace = true
+ring.workspace = true
+pulldown-cmark.workspace = true
+
+# The logcat writer (design §3.5): android_log-sys behind a small tracing layer.
+[target.'cfg(target_os = "android")'.dependencies]
+android_log-sys = "0.3"
+
+[dev-dependencies]
+tempfile = "3"
+tokio = { workspace = true, features = ["test-util", "net", "io-util"] }
+rcgen.workspace = true
+tokio-rustls.workspace = true
+
+[lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
