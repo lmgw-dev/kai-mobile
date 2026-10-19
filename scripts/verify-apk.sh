@@ -32,7 +32,10 @@ for apk in "$@"; do
     status=1
   fi
   if [[ -n "${KAI_EXPECT_VERSION_NAME:-}${KAI_EXPECT_VERSION_CODE:-}" ]]; then
-    badging=$("$bt/aapt2" dump badging "$apk" | head -1)
+    # Captured whole, then cut: `| head -1` closes the pipe after one line and aapt2 dies of SIGPIPE
+    # (141 under pipefail) when the badging is longer than the pipe buffer, as a release APK's is.
+    badging=$("$bt/aapt2" dump badging "$apk")
+    badging=${badging%%$'\n'*}
     got_name=$(sed -nE "s/.* versionName='([^']*)'.*/\1/p" <<<"$badging")
     got_code=$(sed -nE "s/.* versionCode='([^']*)'.*/\1/p" <<<"$badging")
     if [[ "$got_name" == "${KAI_EXPECT_VERSION_NAME:-$got_name}" && "$got_code" == "${KAI_EXPECT_VERSION_CODE:-$got_code}" ]]; then
@@ -68,8 +71,8 @@ for apk in "$@"; do
   rm -rf "$work/x" && mkdir "$work/x"
   unzip -q "$apk" 'lib/*' -d "$work/x"
   while IFS= read -r so; do
-    # The smallest p_align of the LOAD segments.
-    align=$("$readelf" -lW "$so" | awk '$1 == "LOAD" {print strtonum($NF)}' | sort -n | head -1)
+    # The smallest p_align of the LOAD segments (sed -n 1p reads to the end, unlike head: no SIGPIPE).
+    align=$("$readelf" -lW "$so" | awk '$1 == "LOAD" {print strtonum($NF)}' | sort -n | sed -n 1p)
     printf '%-60s LOAD p_align %#x  %s bytes\n' "${so#"$work/x/"}" "$align" "$(stat -c %s "$so")"
     ((align >= 16384)) || { echo "  not 16 KB aligned: $so" >&2; status=1; }
   done < <(find "$work/x" -name '*.so' | sort)

@@ -836,7 +836,7 @@ dependencies = [
 
 [[package]]
 name = "kai-mobile-core"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "android_log-sys",
  "arc-swap",
@@ -1871,7 +1871,7 @@ dependencies = [
 
 [[package]]
 name = "uniffi-bindgen"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "uniffi",
 ]
