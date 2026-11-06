@@ -74,6 +74,7 @@ import dev.rootshell.kai.core.ffi.CallEnd
 import dev.rootshell.kai.core.ffi.CallPhase
 import dev.rootshell.kai.core.ffi.CallStart
 import dev.rootshell.kai.core.ffi.CaptionLine
+import dev.rootshell.kai.core.ffi.CoreException
 import dev.rootshell.kai.core.ffi.RingState
 import dev.rootshell.kai.core.ffi.Speaker
 import dev.rootshell.kai.core.ffi.VoiceAction
@@ -288,10 +289,13 @@ private suspend fun PressGestureScope.holdToTalk(app: KaiApplication, feel: Feel
     }
 }
 
-/** A [CallStart] kept across a fold's recreation while the microphone's permission is asked. */
-private val CallStartSaver = Saver<CallStart?, List<Boolean>>(
-    save = { s -> s?.let { listOf(it.new, it.takeOver) } },
-    restore = { CallStart(new = it[0], takeOver = it[1]) },
+/**
+ * A [CallStart] kept across a fold's recreation while the microphone's permission is asked: its
+ * flags and the thread it binds (design §7.12), -1 for none (a real thread's id is positive).
+ */
+private val CallStartSaver = Saver<CallStart?, List<Long>>(
+    save = { s -> s?.let { listOf(if (it.new) 1L else 0L, if (it.takeOver) 1L else 0L, it.thread ?: -1L) } },
+    restore = { CallStart(new = it[0] == 1L, takeOver = it[1] == 1L, thread = it[2].takeIf { t -> t > 0 }) },
 )
 
 /**
@@ -308,7 +312,8 @@ fun rememberTalk(app: KaiApplication): (CallStart) -> Unit {
     val start: (CallStart) -> Unit = { s ->
         app.hub.callError.value = null
         app.scope.launch {
-            val why = (app.calls.start(s) as? Started.Refused)?.words
+            // A thread's Talk moves a running call there (design §7.12); every other start is as before.
+            val why = (app.calls.talk(s) as? Started.Refused)?.words
             app.hub.callError.value = why
             if (why != null) feel.reject()
         }
@@ -340,22 +345,40 @@ fun rememberTalk(app: KaiApplication): (CallStart) -> Unit {
 }
 
 /**
+ * Stay (design §7.12): call [call]'s move to another thread is called off. Why not (the call moved
+ * already, or ended) is the call's error line, as a refused start's is.
+ */
+fun stay(app: KaiApplication, call: ULong) {
+    app.hub.callError.value = null
+    app.scope.launch {
+        try {
+            app.core.voice.stay(call)
+        } catch (e: CoreException) {
+            app.hub.callError.value = e.message ?: app.getString(R.string.voice_stay_failed)
+        }
+    }
+}
+
+/**
  * A call's facts under its state line (design §7.1, §7.10, §8.2): half duplex, K16's wait, Kai's
- * local mute, a held stage, the hold, a static value's note, lmgw's latest error.
+ * local mute, a held stage, the stages a fallback answers for, the hold, a static value's note,
+ * lmgw's latest error.
  */
 @Composable
 fun CallFacts(v: VoiceView) {
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
         if (v.halfDuplex) Line(stringResource(R.string.voice_half_duplex))
+        // The thread the call is bound to, when it is not the Kai conversation (design §7.12).
+        if (v.bindThread != null) {
+            Line(v.threadTitle?.takeIf { it.isNotBlank() }?.let { stringResource(R.string.voice_in_thread, it) } ?: stringResource(R.string.voice_in_a_thread))
+        }
+        if (v.switching != null) Line(stringResource(R.string.thread_voice_leaving))
         v.waitingFor?.let { Line(stringResource(R.string.voice_waiting_for, it)) }
         if (v.kaiMuted) Line(stringResource(R.string.voice_kai_muted))
         v.heldStage?.let { Line(stringResource(R.string.voice_held_stage, it), amber = true) }
-        if (v.hold) {
-            Line(
-                v.holdFallback?.let { stringResource(R.string.hold_badge_fallback, it) } ?: stringResource(R.string.hold_badge),
-                amber = true,
-            )
-        }
+        // Each stage a fallback answers for (its own model's fallback, for whatever reason lmgw has).
+        v.fallbackStages.forEach { Line(it, amber = true) }
+        if (v.hold) Line(stringResource(R.string.hold_badge), amber = true)
         v.note?.let { Line(it) }
         v.error?.let { Line(it, warning = true) }
     }
@@ -565,10 +588,11 @@ fun EndCard(end: CallEnd, talk: (CallStart) -> Unit) {
         ButtonRow(Modifier.padding(top = 12.dp)) {
             end.actions.forEach { a ->
                 when (a) {
-                    VoiceAction.RECONNECT -> Button(onClick = { talk(CallStart(new = false, takeOver = false)) }) {
+                    // Bound as the ended call was: a thread's call reconnects to its thread (design §7.12).
+                    VoiceAction.RECONNECT -> Button(onClick = { talk(CallStart(new = false, takeOver = false, thread = end.thread)) }) {
                         Text(stringResource(R.string.reconnect))
                     }
-                    VoiceAction.TAKE_OVER -> Button(onClick = { talk(CallStart(new = false, takeOver = true)) }) {
+                    VoiceAction.TAKE_OVER -> Button(onClick = { talk(CallStart(new = false, takeOver = true, thread = end.thread)) }) {
                         Text(stringResource(R.string.take_over))
                     }
                 }

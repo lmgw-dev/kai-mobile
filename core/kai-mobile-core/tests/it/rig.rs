@@ -21,6 +21,8 @@ pub fn facts() -> PlatformFacts {
     PlatformFacts {
         os: "Android 16".into(),
         app_version: "0.1.0+test".into(),
+        app_id: "dev.rootshell.kai.test".into(),
+        device_name: Some("Test phone".into()),
         notified_approvals: Vec::new(),
         notified_replies: Vec::new(),
     }
@@ -250,7 +252,7 @@ impl Rig {
 pub fn hello(cursor: &str, keepalive_s: u32, open: &str) -> String {
     let h = serde_json::json!({"epoch": "e1", "cursor": cursor, "keepalive_s": keepalive_s,
         "retention_days": 7, "principal": {"kind": "device", "name": "phone"},
-        "hold": {"active": false, "fallback_alias": null}, "voice": [], "turns": [],
+        "hold": {"active": false}, "voice": [], "turns": [],
         "open_approvals": serde_json::from_str::<serde_json::Value>(open).unwrap()});
     format!("event: hello\ndata: {h}\n\n")
 }
@@ -259,7 +261,7 @@ pub fn hello(cursor: &str, keepalive_s: u32, open: &str) -> String {
 pub fn hello_with(cursor: &str, urls: &[&str], cert: Option<(&str, &str)>) -> String {
     let h = serde_json::json!({"epoch": "e1", "cursor": cursor, "keepalive_s": 120,
         "retention_days": 7, "principal": {"kind": "device", "name": "phone"},
-        "hold": {"active": true, "fallback_alias": "cloud"}, "voice": [], "turns": [],
+        "hold": {"active": true}, "voice": [], "turns": [],
         "open_approvals": [], "urls": urls,
         "cert": cert.map(|(a, n)| serde_json::json!({"not_after": a, "notice_after": n})),
         "dashboard_url": "http://198.51.100.20:8001/"});

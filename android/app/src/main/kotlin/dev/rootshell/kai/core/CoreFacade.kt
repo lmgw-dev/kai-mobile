@@ -10,6 +10,8 @@ import dev.rootshell.kai.core.ffi.NotificationId
 import dev.rootshell.kai.core.ffi.PairingPreview
 import dev.rootshell.kai.core.ffi.PairingView
 import dev.rootshell.kai.core.ffi.PlayoutStats
+import dev.rootshell.kai.core.ffi.SearchIn
+import dev.rootshell.kai.core.ffi.SearchPageView
 import dev.rootshell.kai.core.ffi.Settings
 import dev.rootshell.kai.core.ffi.TransportState
 import dev.rootshell.kai.core.ffi.Update
@@ -68,6 +70,28 @@ interface CoreFacade {
     suspend fun dismissApproval(approvalRequestId: String)
     fun notificationGone(id: NotificationId)
 
+    /** The threads browser shows (its lists are read and kept current) or closed (design §6.4). */
+    fun browser(showing: Boolean)
+    fun browserArchived(showing: Boolean)
+
+    /** One page of lmgw's search; the core refuses under two characters without a request. */
+    suspend fun search(query: String, scope: SearchIn, folderId: Long?, offset: Long?): SearchPageView
+
+    /** Opens a thread beside the Kai conversation (`Update.Opened`, `Update.OpenedMessages`). */
+    fun openThread(threadId: Long)
+    fun closeThread()
+    suspend fun sendInThread(threadId: Long, text: String)
+
+    /** A new thread in the folder, with the folder's model; it opens. Answers its id. */
+    suspend fun newThread(folderId: Long): Long
+    suspend fun pinThread(threadId: Long, pinned: Boolean)
+    suspend fun archiveThread(threadId: Long, archived: Boolean)
+    suspend fun moveThread(threadId: Long, folderId: Long?)
+
+    /** lmgw trims the title and refuses an empty one with its code. */
+    suspend fun renameThread(threadId: Long, title: String)
+    suspend fun deleteThread(threadId: Long)
+
     /** The voice entry points (design §3.2, §7). */
     val voice: VoiceFacade
 }
@@ -87,6 +111,19 @@ interface VoiceFacade {
      * older call's events: its PeerConnection may still be closing).
      */
     suspend fun start(start: CallStart, sink: EventSink): ULong
+
+    /**
+     * Talk elsewhere during a call (design §7.12): the running call moves to `start`'s binding at its
+     * next quiet point; false when no call runs (the caller starts `start`). Throws with the state's
+     * words as [start] does (a temporary thread, the link).
+     */
+    suspend fun switchTo(start: CallStart): Boolean
+
+    /**
+     * Stay (design §7.12): call `call`'s move to another thread is called off. Needs nothing of the
+     * link; throws with words when that call moved already or ended (never touching the next call).
+     */
+    suspend fun stay(call: ULong)
 
     /** The offer POSTed; lmgw's answer SDP. Throws when the call could not be set up (it has ended). */
     suspend fun offer(call: ULong, sdp: String): String

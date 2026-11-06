@@ -2,6 +2,7 @@ package dev.rootshell.kai.app
 
 import dev.rootshell.kai.core.CoreFacade
 import dev.rootshell.kai.core.ffi.ApprovalView
+import dev.rootshell.kai.core.ffi.BrowserView
 import dev.rootshell.kai.core.ffi.CallStart
 import dev.rootshell.kai.core.ffi.CaptionLine
 import dev.rootshell.kai.core.ffi.ConnectionView
@@ -9,9 +10,12 @@ import dev.rootshell.kai.core.ffi.ConversationView
 import dev.rootshell.kai.core.ffi.MessageView
 import dev.rootshell.kai.core.ffi.NotificationId
 import dev.rootshell.kai.core.ffi.NotificationView
+import dev.rootshell.kai.core.ffi.OpenedView
 import dev.rootshell.kai.core.ffi.Update
 import dev.rootshell.kai.core.ffi.VoiceView
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -49,6 +53,15 @@ class CoreHub(private val core: CoreFacade, private val sink: HubSink) {
     private val _approvals = MutableStateFlow<List<ApprovalView>>(emptyList())
     private val _voice = MutableStateFlow<VoiceView?>(null)
     private val _captions = MutableStateFlow<List<CaptionLine>>(emptyList())
+    private val _browser = MutableStateFlow<BrowserView?>(null)
+    private val _opened = MutableStateFlow<OpenedView?>(null)
+    private val _openedMessages = MutableStateFlow<List<MessageView>>(emptyList())
+    private val _selected = MutableStateFlow<ThreadTarget?>(null)
+    private var browserShown = false
+
+    /** The browser's drafts, search and open section, held across a fold (design §6.4). */
+    val threadsUi = ThreadsUi(CoroutineScope(SupervisorJob() + Dispatchers.Default)) { q, s, f, o -> core.search(q, s, f, o) }
+
     /** Unbounded: a notice waits for the screen's snackbar, it is never dropped. */
     private val _notices = Channel<String>(Channel.UNLIMITED)
 
@@ -56,6 +69,16 @@ class CoreHub(private val core: CoreFacade, private val sink: HubSink) {
     val conversation: StateFlow<ConversationView?> = _conversation
     val messages: StateFlow<List<MessageView>> = _messages
     val approvals: StateFlow<List<ApprovalView>> = _approvals
+
+    /** The threads browser's lists while it shows (design §6.4). */
+    val browser: StateFlow<BrowserView?> = _browser
+
+    /** The opened thread and its messages (design §6.4); null while none is open. */
+    val opened: StateFlow<OpenedView?> = _opened
+    val openedMessages: StateFlow<List<MessageView>> = _openedMessages
+
+    /** The thread the owner opened from the browser, and the message a search hit named. */
+    val selected: StateFlow<ThreadTarget?> = _selected
 
     /** The voice call's snapshot (design §7.1); null before the core published one. */
     val voice: StateFlow<VoiceView?> = _voice
@@ -102,6 +125,35 @@ class CoreHub(private val core: CoreFacade, private val sink: HubSink) {
         }
     }
 
+    /**
+     * The browser's screens are on the back stack (`true`) or left it: the core reads the lists
+     * while they are and drops them after, and leaving closes the opened thread. A fold's
+     * recreation reports the same value again, which changes nothing.
+     */
+    fun showBrowser(showing: Boolean) {
+        if (browserShown == showing) return
+        browserShown = showing
+        core.browser(showing)
+        if (!showing) {
+            _browser.value = null
+            threadsUi.left()
+            // Whatever the core has open closes, whether or not the hub's selection knows of it
+            // (a New thread's, an opening the selection has already left).
+            _selected.value = null
+            core.closeThread()
+        }
+    }
+
+    /** Opens `target`'s thread in the core (another one closes it first), or closes the open one. */
+    fun select(target: ThreadTarget?) {
+        val old = _selected.value
+        _selected.value = target
+        when {
+            target == null -> if (old != null) core.closeThread()
+            target.id != old?.id -> core.openThread(target.id)
+        }
+    }
+
     fun setVisible(visible: Boolean) {
         if (this.visible == visible) return
         this.visible = visible
@@ -130,6 +182,12 @@ class CoreHub(private val core: CoreFacade, private val sink: HubSink) {
                 sink.voice(previous, update.view, visible)
             }
             is Update.Caption -> _captions.value = CaptionList.apply(_captions.value, update.line)
+            is Update.Browser -> if (browserShown) _browser.value = update.view
+            is Update.Opened -> {
+                _opened.value = update.view
+                if (update.view == null) _openedMessages.value = emptyList()
+            }
+            is Update.OpenedMessages -> _openedMessages.value = MessageList.apply(_openedMessages.value, update.delta)
         }
     }
 }

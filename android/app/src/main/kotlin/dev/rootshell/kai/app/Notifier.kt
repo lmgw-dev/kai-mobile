@@ -264,7 +264,13 @@ class Notifier(private val context: Context) {
      */
     fun call(view: VoiceView?, idleEndS: UInt): Notification {
         val parts = mutableListOf(view?.words?.takeIf { it.isNotBlank() } ?: context.getString(R.string.call_starting))
-        view?.threadTitle?.let { parts += context.getString(R.string.call_thread, it) }
+        // The bound thread when it is not the Kai conversation (design §7.12), once lmgw named it;
+        // the locked face has none.
+        if (view?.bindThread == null) {
+            view?.threadTitle?.let { parts += context.getString(R.string.call_thread, it) }
+        } else {
+            view.threadTitle?.takeIf { it.isNotBlank() }?.let { parts += context.getString(R.string.call_thread_other, it) }
+        }
         val quietEnds = (view?.phase == CallPhase.LIVE || view?.phase == CallPhase.PENDING) && view.awaiting.isEmpty()
         if (quietEnds && idleEndS > 0u) parts += context.getString(R.string.call_idle_end, idleEndS.toInt())
         val actions = callActions(view)
@@ -314,7 +320,9 @@ class Notifier(private val context: Context) {
     /**
      * A call that ended while the app was not on screen (design §7.9, §12.3: voice moved or stayed
      * elsewhere, connection lost): its words on channel `notices`, with Take over where the end
-     * offers it, which opens the voice screen to start the call (a push never starts voice).
+     * offers it, which opens the voice screen to start the call (a push never starts voice). The
+     * call binds as the ended one did (design §7.12): its thread's id rides in the action's intent,
+     * never its title, so a later call's end or a restarted process cannot change it.
      */
     fun voiceNotice(end: CallEnd) {
         val said = end.words ?: return
@@ -340,7 +348,7 @@ class Notifier(private val context: Context) {
                     Notification.Action.Builder(
                         Icon.createWithResource(context, R.drawable.ic_notification),
                         context.getString(R.string.take_over),
-                        open(tag, takeOver = true),
+                        open(tag, takeOver = true, thread = end.thread),
                     ).build(),
                 )
             }
@@ -389,8 +397,11 @@ class Notifier(private val context: Context) {
         return PendingIntent.getBroadcast(context, 0, intent, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
     }
 
-    /** A tap (or Talk, or Take over) through the trampoline; `tag` null: the status notification. */
-    private fun open(tag: String?, talk: Boolean = false, takeOver: Boolean = false): PendingIntent {
+    /**
+     * A tap (or Talk, or Take over) through the trampoline; `tag` null: the status notification.
+     * `thread`: the thread a Take over binds (design §7.12), none for the Kai folder.
+     */
+    private fun open(tag: String?, talk: Boolean = false, takeOver: Boolean = false, thread: Long? = null): PendingIntent {
         val action = when {
             takeOver -> NotificationTapActivity.ACTION_TAKE_OVER
             talk -> NotificationTapActivity.ACTION_TALK
@@ -401,6 +412,7 @@ class Notifier(private val context: Context) {
             .setIdentifier("${tag ?: STATUS_IDENTITY}:$action")
             .setFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             .putExtra(NotificationTapActivity.EXTRA_TAG, tag)
+        thread?.let { intent.putExtra(NotificationTapActivity.EXTRA_THREAD, it) }
         return PendingIntent.getActivity(context, 0, intent, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
     }
 

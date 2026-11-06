@@ -14,6 +14,8 @@ mod approvals;
 mod device;
 // The assistant overlay's dismissal.
 mod dismiss;
+// A thread's call and the move to another thread (§7.12).
+mod thread;
 
 const DESKTOP: &str = "device 'desktop'";
 
@@ -42,7 +44,7 @@ fn call_with(facts: Facts, start: CallStart, expect: Option<&str>) -> Call {
         facts,
         expect.map(str::to_owned),
         Some((7, "Kai".into())),
-        (false, None),
+        false,
         0,
     );
     c.answered("rtc_1".into(), &answer(262_144), 0);
@@ -129,7 +131,7 @@ fn the_cue_is_dtls_connected_and_session_created_binds() {
         facts(),
         None,
         Some((7, "Kai".into())),
-        (false, None),
+        false,
         0,
     );
     assert_eq!(c.drain(), vec![Effect::Mic(MicState::Live)]);
@@ -164,7 +166,7 @@ fn an_expected_pending_bind_keeps_the_microphone_off_and_sends_only_take_over() 
         facts(),
         Some(DESKTOP.into()),
         Some((7, "Kai".into())),
-        (false, None),
+        false,
         0,
     );
     assert_eq!(c.drain(), vec![Effect::Mic(MicState::Off)]);
@@ -234,6 +236,7 @@ fn an_ended_call_s_take_over_sends_it_at_the_prompt() {
     let start = CallStart {
         new: false,
         take_over: true,
+        thread: None,
     };
     let mut c = call_with(facts(), start, Some(DESKTOP));
     c.channel_message(pending(DESKTOP), 10);
@@ -294,7 +297,7 @@ fn an_unanswered_prompt_ends_as_thread_bound_with_take_over() {
 fn push_to_talk_clears_at_the_press_commits_at_the_release_and_keeps_its_tail() {
     let mut f = facts();
     f.mode = VoiceMode::PushToTalk;
-    let mut c = Call::new(1, CallStart::default(), f, None, None, (false, None), 0);
+    let mut c = Call::new(1, CallStart::default(), f, None, None, false, 0);
     assert_eq!(c.drain(), vec![Effect::Mic(MicState::Silent)]);
     assert_eq!(
         c.session_part().unwrap().to_value(),
@@ -343,7 +346,7 @@ fn without_a_tail_setting_the_release_silences_at_once_and_the_view_says_so() {
     c.press(10);
     c.release(500);
     assert!(c.drain().contains(&Effect::Mic(MicState::Silent)));
-    assert!(c.view(500).note.unwrap().contains("voice.ptt_tail_ms"));
+    assert!(c.view(500).note.unwrap().contains("Push-to-talk tail"));
 }
 
 #[test]
@@ -606,15 +609,7 @@ fn lmgw_s_parts_are_joined_and_a_broken_set_is_said_while_the_call_goes_on() {
 
 #[test]
 fn the_phone_s_events_are_split_to_lmgw_s_message_size() {
-    let mut c = Call::new(
-        1,
-        CallStart::default(),
-        facts(),
-        None,
-        None,
-        (false, None),
-        0,
-    );
+    let mut c = Call::new(1, CallStart::default(), facts(), None, None, false, 0);
     c.answered("rtc_1".into(), &answer(90), 0);
     c.channel_message(created(7, "automatic"), 0);
     c.drain();
@@ -943,7 +938,10 @@ fn no_word_from_lmgw_within_the_connect_bound_gives_the_start_up() {
     let end = ended(&effects).unwrap();
     assert_eq!(end.reason, EndReason::ConnectTimeout);
     let words = end.words.unwrap();
-    assert!(words.contains("15 s (voice.connect_timeout_s)"), "{words}");
+    assert!(
+        words.contains("15 s (Settings → Voice → Time to start a call)"),
+        "{words}"
+    );
     assert!(words.contains("since the listening cue"), "{words}");
     assert!(effects.contains(&Effect::ClosePeer));
     assert_eq!(c.stale_id(), Some("rtc_1"));
@@ -985,7 +983,7 @@ fn quiet_for_voice_idle_end_s_ends_the_call_and_activity_resets_it() {
     assert_eq!(end.reason, EndReason::Idle);
     assert_eq!(
         end.words.as_deref(),
-        Some("voice ended after 30 s of quiet (voice.idle_end_s)")
+        Some("voice ended after 30 s of quiet (Settings → Voice → End a quiet call after)")
     );
     // A pending bind counts as quiet.
     let mut c = call_with(facts(), CallStart::default(), Some(DESKTOP));
@@ -1057,6 +1055,36 @@ fn errors_are_shown_with_their_code_and_bind_pending_is_not() {
     assert_eq!(
         c.view(30).held_stage.as_deref(),
         Some("chat gemma (gpu_hold)")
+    );
+}
+
+#[test]
+fn a_stage_a_fallback_answers_for_is_shown_until_its_model_says_otherwise() {
+    let mut c = bound();
+    let state = |stage: &str, alias: &str, state: &str, by: Option<&str>| {
+        let mut e =
+            json!({"type": "lmgw.model.state", "stage": stage, "alias": alias, "state": state});
+        if let Some(b) = by {
+            e["answered_by"] = json!(b);
+        }
+        ev(e)
+    };
+    c.channel_message(state("chat", "gemma", "held", None), 10);
+    c.channel_message(state("chat", "gemma", "fallback", Some("cloud")), 20);
+    c.channel_message(state("asr", "parakeet", "fallback", None), 30);
+    let v = c.view(30);
+    assert_eq!(v.held_stage, None);
+    assert_eq!(
+        v.fallback_stages,
+        [
+            "chat gemma: cloud answers in its place",
+            "asr parakeet: a fallback answers in its place"
+        ]
+    );
+    c.channel_message(state("chat", "gemma", "ready", None), 40);
+    assert_eq!(
+        c.view(40).fallback_stages,
+        ["asr parakeet: a fallback answers in its place"]
     );
 }
 

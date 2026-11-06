@@ -27,7 +27,7 @@ private fun call(phase: CallPhase, thread: Long, awaiting: List<String>) = Voice
     call = 1u, phase = phase, ring = RingState.LISTENING, words = "words", cue = true, spoken = false,
     pushToTalk = false, muted = false, paused = false, halfDuplex = false, pressed = false, kaiMuted = false,
     stoppable = false, heldBy = null, takingOver = false, pendingNote = null, waitingFor = null, threadId = thread,
-    threadTitle = "Kai", tool = null, awaiting = awaiting, hold = false, holdFallback = null, heldStage = null,
+    threadTitle = "Kai", tool = null, awaiting = awaiting, hold = false, heldStage = null, fallbackStages = emptyList(),
     error = null, note = null, end = null,
 )
 

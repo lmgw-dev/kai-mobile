@@ -63,7 +63,7 @@ fn call_posts(mock: &Mock) -> Vec<String> {
 }
 
 /// A libwebrtc offer (the POST carries it as it is; the mock does not read it).
-const OFFER: &str = "v=0\r\no=- 46117 2 IN IP4 127.0.0.1\r\ns=-\r\nt=0 0\r\na=group:BUNDLE 0 1\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\na=rtpmap:111 opus/48000/2\r\nm=application 9 UDP/DTLS/SCTP webrtc-datachannel\r\n";
+pub(super) const OFFER: &str = "v=0\r\no=- 46117 2 IN IP4 127.0.0.1\r\ns=-\r\nt=0 0\r\na=group:BUNDLE 0 1\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\na=rtpmap:111 opus/48000/2\r\nm=application 9 UDP/DTLS/SCTP webrtc-datachannel\r\n";
 
 /// Kotlin's side as the tests fake it: every call as a line, in order.
 struct Sink {
@@ -102,13 +102,13 @@ impl EventSink for Sink {
     }
 }
 
-struct Kotlin {
+pub(super) struct Kotlin {
     rx: mpsc::UnboundedReceiver<String>,
-    ends: Arc<Mutex<Vec<CallEnd>>>,
+    pub(super) ends: Arc<Mutex<Vec<CallEnd>>>,
 }
 
 impl Kotlin {
-    fn new() -> (Box<dyn EventSink>, Self) {
+    pub(super) fn new() -> (Box<dyn EventSink>, Self) {
         let (tx, rx) = mpsc::unbounded_channel();
         let ends = Arc::new(Mutex::new(Vec::new()));
         (
@@ -121,15 +121,25 @@ impl Kotlin {
     }
 
     /// The next line the sink got, within 10 s.
-    async fn next(&mut self) -> String {
+    pub(super) async fn next(&mut self) -> String {
         tokio::time::timeout(Duration::from_secs(10), self.rx.recv())
             .await
             .expect("a sink call")
             .expect("the sink lives")
     }
 
+    /// The lines the sink got within `wait`.
+    pub(super) async fn within(&mut self, wait: Duration) -> Vec<String> {
+        let deadline = tokio::time::Instant::now() + wait;
+        let mut seen = Vec::new();
+        while let Ok(Some(l)) = tokio::time::timeout_at(deadline, self.rx.recv()).await {
+            seen.push(l);
+        }
+        seen
+    }
+
     /// The lines up to one starting with `prefix` (that one included).
-    async fn until(&mut self, prefix: &str) -> Vec<String> {
+    pub(super) async fn until(&mut self, prefix: &str) -> Vec<String> {
         let mut seen = Vec::new();
         loop {
             let l = self.next().await;
@@ -144,13 +154,13 @@ impl Kotlin {
 
 /// A paired core whose feed is up and whose conversation is ready (folder 5, thread 7); `voice`
 /// the holders the feed's `hello` names.
-async fn connected(mock: &Mock, voice: serde_json::Value) -> (Rig, super::mock::Feed) {
+pub(super) async fn connected(mock: &Mock, voice: serde_json::Value) -> (Rig, super::mock::Feed) {
     mock.with_conversation(5, 7, vec![]);
     let mut rig = Rig::paired(&PKI, &[&mock.url]).await;
     let feed = mock.feed().await;
     let h = json!({"epoch": "e1", "cursor": "e1:4:aa", "keepalive_s": 120, "retention_days": 7,
         "principal": {"kind": "device", "name": "phone"},
-        "hold": {"active": false, "fallback_alias": null}, "voice": voice, "turns": [],
+        "hold": {"active": false}, "voice": voice, "turns": [],
         "open_approvals": []});
     feed.send(&format!("event: hello\ndata: {h}\n\n"));
     feed.send(&caught_up("e1:4:aa"));
@@ -162,7 +172,7 @@ async fn connected(mock: &Mock, voice: serde_json::Value) -> (Rig, super::mock::
     (rig, feed)
 }
 
-fn posts(mock: &Mock) -> Vec<super::mock::Req> {
+pub(super) fn posts(mock: &Mock) -> Vec<super::mock::Req> {
     mock.requests("/v1/realtime/calls")
         .into_iter()
         .filter(|r| r.method == "POST" && !r.path.contains("/hangup"))
@@ -221,6 +231,7 @@ async fn the_session_part_carries_the_override_and_new_rolls_the_folder_over() {
             CallStart {
                 new: true,
                 take_over: false,
+                thread: None,
             },
             sink,
         )

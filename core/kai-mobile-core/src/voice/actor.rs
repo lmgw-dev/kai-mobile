@@ -14,19 +14,22 @@
 //!   clear it.
 //! - **The POST** goes to the URL that last answered the feed, else the one the warm-up's race
 //!   found; a POST that cannot connect races the other URLs once. A 404 `chat_folder_not_found`
-//!   looks the folder up again (§6.1's rule, which may create it) and POSTs once more.
+//!   looks the folder up again (§6.1's rule, which may create it) and POSTs once more. A thread's
+//!   call (§7.12) binds `chat_thread` and looks no folder up.
+
+mod thread;
 
 use std::{path::PathBuf, sync::Arc, time::Duration};
 
 use arc_swap::ArcSwap;
 use lmgw_client::requests::{
     ApiError,
-    calls::{self, CallAnswer, CallBind, Takeover},
+    calls::{self, CallAnswer, Takeover},
 };
 use tokio::sync::{mpsc, oneshot, watch};
 
 use super::{
-    AudioFocus, CallStart, EventSink, HeadsetPress, PlayoutStats, TransportState,
+    AudioFocus, CallStart, EventSink, HeadsetPress, PlayoutStats, TransportState, bind,
     call::{Call, Effect, Facts},
     ends,
     signal::{self, Fail},
@@ -53,12 +56,16 @@ pub struct Ticket {
     /// The Kai folder: the conversation's, else the one the pairing remembers.
     pub folder: Option<i64>,
     pub folder_name: String,
-    /// Another client holds the conversation's thread's voice (the feed's `voice`): a pending bind
-    /// is expected.
+    /// The thread the call binds by `chat_thread` (§7.12), as [`bind::choose`] decided; `None`:
+    /// the Kai folder.
+    pub bind_thread: Option<i64>,
+    /// Another client holds the voice of the thread the call binds (the feed's `voice`): a pending
+    /// bind is expected.
     pub voice_by: Option<String>,
+    /// The thread the call binds, as the phone knows it now (a thread's title may be empty until
+    /// lmgw names it at the bind).
     pub thread: Option<(i64, String)>,
     pub held: bool,
-    pub hold_fallback: Option<String>,
 }
 
 /// What the voice task is told.
@@ -77,6 +84,34 @@ pub enum Cmd {
         call: u64,
         sdp: String,
         reply: oneshot::Sender<Result<String, CoreError>>,
+    },
+    /// Talk in an opened thread during a call (§7.12): the running call moves to `start`, bound by
+    /// `bind` (the link's choice), at its next quiet point; `false` when no call runs.
+    Switch {
+        bind: Option<i64>,
+        start: CallStart,
+        reply: oneshot::Sender<bool>,
+    },
+    /// Stay (§7.12, rule 3): call `call`'s move is called off; refused with words when that call
+    /// moved or ended already (a Stay never touches the next call).
+    Stay {
+        call: u64,
+        reply: oneshot::Sender<Result<(), CoreError>>,
+    },
+    /// Who else answers in the thread a thread's call binds (K16), from the feed's live facts.
+    Live {
+        thread: i64,
+        answering: Vec<String>,
+    },
+    /// The feed says thread `thread` was deleted or left this device's reach: a move waiting to go
+    /// there is called off (§7.12).
+    ThreadGone {
+        thread: i64,
+    },
+    /// A start was refused before it reached this task (the link's state, §7.3 step 1): when the
+    /// ended call owes a rebind's next call, that was it, and the call says so (§7.7, §7.12).
+    StartRefused {
+        words: String,
     },
     /// The POST's outcome for call `n`.
     Posted {
@@ -145,7 +180,6 @@ pub enum Cmd {
     },
     Hold {
         held: bool,
-        fallback: Option<String>,
     },
     /// The calls waiting for the owner's verdict, by thread (the link's book, §11).
     Approvals {
@@ -199,7 +233,7 @@ pub struct VoiceActor {
     owed: Vec<String>,
     published: Option<VoiceView>,
     /// The hold as the link last said it, for a call that starts.
-    held: (bool, Option<String>),
+    held: bool,
     /// The calls waiting for the owner's verdict as the link last said them, for a call that starts.
     waiting: Vec<Waiting>,
 }
@@ -227,7 +261,7 @@ impl VoiceActor {
             n: 0,
             owed,
             published: None,
-            held: (false, None),
+            held: false,
             waiting: Vec::new(),
         }
     }
@@ -321,6 +355,27 @@ impl VoiceActor {
                 let _ = reply.send(r);
             }
             Cmd::Offer { call, sdp, reply } => self.offer(call, sdp, reply),
+            Cmd::Switch { bind, start, reply } => {
+                let _ = reply.send(self.switch(bind, start, now));
+            }
+            Cmd::Stay { call, reply } => {
+                let _ = reply.send(self.stay(call, now));
+            }
+            Cmd::Live { thread, answering } => {
+                if let Some(s) = self.slot.as_mut() {
+                    s.call.live(thread, answering, now);
+                }
+            }
+            Cmd::ThreadGone { thread } => {
+                if let Some(s) = self.slot.as_mut() {
+                    s.call.thread_gone(thread, now);
+                }
+            }
+            Cmd::StartRefused { words } => {
+                if let Some(s) = self.slot.as_mut() {
+                    s.call.restart_refused(words);
+                }
+            }
             Cmd::Posted { n, result } => self.posted(n, result, now),
             Cmd::HungUp { call_id, done } => {
                 if done {
@@ -333,10 +388,10 @@ impl VoiceActor {
                     s.call.conversation(thread, answering, now);
                 }
             }
-            Cmd::Hold { held, fallback } => {
-                self.held = (held, fallback.clone());
+            Cmd::Hold { held } => {
+                self.held = held;
                 if let Some(s) = self.slot.as_mut() {
-                    s.call.hold(held, fallback);
+                    s.call.hold(held);
                 }
             }
             Cmd::Approvals { waiting } => {
@@ -499,11 +554,13 @@ impl VoiceActor {
             }
         }
         self.n += 1;
+        // The link chose the binding (a Talk on the Kai conversation's own thread binds the folder).
+        let start = CallStart {
+            thread: ticket.bind_thread,
+            ..start
+        };
         let facts = self.facts();
-        let held = (
-            ticket.held || self.held.0,
-            ticket.hold_fallback.clone().or(self.held.1.clone()),
-        );
+        let held = ticket.held || self.held;
         let mut call = Call::new(
             self.n,
             start,
@@ -518,6 +575,7 @@ impl VoiceActor {
             call = self.n,
             new = start.new,
             take_over = start.take_over,
+            thread = ?start.thread,
             expect_pending = ticket.voice_by.is_some(),
             "voice: a call starts"
         );
@@ -533,6 +591,7 @@ impl VoiceActor {
             });
         }
         let _ = self.ctx.link.send(LinkCmd::CallRunning(Some(self.n)));
+        let _ = self.ctx.link.send(LinkCmd::CallThread(start.thread));
         self.published = None;
         self.slot = Some(Slot {
             call,
@@ -612,7 +671,7 @@ impl VoiceActor {
                 }
             }
             Err(f) => {
-                let (end, err) = refusal(&f, timeout);
+                let (end, err) = refusal(&f, timeout, s.call.start().thread.is_some());
                 s.call.not_answered(end, now);
                 Err(err)
             }
@@ -641,6 +700,7 @@ impl VoiceActor {
                 Effect::Ended(end) => {
                     s.sink.ended(end);
                     let _ = self.ctx.link.send(LinkCmd::CallRunning(None));
+                    let _ = self.ctx.link.send(LinkCmd::CallThread(None));
                 }
                 Effect::FollowThread(t) => {
                     let _ = self.ctx.link.send(LinkCmd::VoiceThread(t));
@@ -709,8 +769,9 @@ async fn warm(t: &Ticket, stagger: Duration, timeout: Duration) -> Option<String
     })
 }
 
-/// A failed POST's end and error (§7.3 step 3).
-fn refusal(f: &Failed, timeout: Duration) -> (crate::voice::CallEnd, CoreError) {
+/// A failed POST's end and error (§7.3 step 3). `by_thread`: the call binds by `chat_thread`
+/// (§7.12), whose 404 `chat_thread_not_found` is the thread gone, with no Reconnect.
+fn refusal(f: &Failed, timeout: Duration, by_thread: bool) -> (crate::voice::CallEnd, CoreError) {
     match f {
         Failed::NotReady(steps) => (
             ends::refused(steps.clone(), false),
@@ -721,8 +782,16 @@ fn refusal(f: &Failed, timeout: Duration) -> (crate::voice::CallEnd, CoreError) 
         Failed::Request(Fail::Refused { status, error }) => {
             let words = format!("lmgw refused the call: {} ({})", error.message, error.code);
             let reconnect = !matches!(*status, 401 | 403);
+            let end = if by_thread && *status == 404 && error.code == "chat_thread_not_found" {
+                ends::thread_gone(crate::voice::CallEnd {
+                    message: Some(words),
+                    ..ends::refused(String::new(), false)
+                })
+            } else {
+                ends::refused(words, reconnect)
+            };
             (
-                ends::refused(words, reconnect),
+                end,
                 CoreError::Refused {
                     code: error.code.clone(),
                     reason: error.message.clone(),
@@ -832,18 +901,19 @@ impl Place {
             };
             let _ = self.cmds.send(Cmd::HungUp { call_id: id, done });
         }
+        // A thread's call binds the thread and needs no folder (§7.12): its query names none, so
+        // no lookup runs for it and a folder's 404 never comes.
+        let by_thread = self.start.thread.is_some();
         let mut folder = match self.ticket.folder {
             Some(f) => f,
+            None if by_thread => i64::default(),
             None => self.lookup(&base).await?,
         };
         let mut looked_again = false;
         let mut raced = false;
         loop {
             let req = calls::call(
-                CallBind::Folder {
-                    id: folder,
-                    new: self.start.new,
-                },
+                bind::call_bind(self.start.thread, folder, self.start.new),
                 Takeover::Ask,
                 &self.sdp,
                 self.part.as_ref(),
@@ -870,7 +940,7 @@ impl Place {
                     }
                 }
                 Err(Fail::Refused { status: 404, error })
-                    if error.code == "chat_folder_not_found" && !looked_again =>
+                    if error.code == "chat_folder_not_found" && !looked_again && !by_thread =>
                 {
                     // The folder is gone or out of reach: the lookup again, which may create it.
                     looked_again = true;

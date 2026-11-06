@@ -2,15 +2,9 @@ package dev.rootshell.kai.ui.screens
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.RadioButton
-import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -18,15 +12,17 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import dev.rootshell.kai.KaiApplication
 import dev.rootshell.kai.R
-import dev.rootshell.kai.ui.LabelledRadio
-import dev.rootshell.kai.ui.LabelledSwitch
+import dev.rootshell.kai.ui.AdvancedGroup
+import dev.rootshell.kai.ui.ChoiceRow
+import dev.rootshell.kai.ui.SectionHeader
+import dev.rootshell.kai.ui.SettingNumber
+import dev.rootshell.kai.ui.SettingSwitch
+import dev.rootshell.kai.ui.SupportingText
 import dev.rootshell.kai.core.ffi.CoreException
 import dev.rootshell.kai.core.ffi.EchoMode
 import dev.rootshell.kai.core.ffi.Route
@@ -34,10 +30,11 @@ import dev.rootshell.kai.core.ffi.VoiceMode
 import kotlinx.coroutines.launch
 
 /**
- * The voice settings (design §3.4, §10.1): whose turn-taking the call follows, the waits, the
- * playout reports, push-to-talk's tail with the rule beside it (it must fit inside lmgw's
- * `webrtc_commit_window_ms`, §7.5), the default output, the echo canceller or half duplex with its
- * tail (§8.2), the cue. Each value is the core's; a value it refuses is said with its key.
+ * The voice settings (design §3.4, §10.1; presented 2026-10-19): everyday choices first (who
+ * decides when you speak, the output, the echo canceller or half duplex, the cues), the waits, the
+ * playout reports and the two tails under Advanced (push-to-talk's tail must fit inside lmgw's
+ * commit window, §7.5; the echo tail is §8.2's). Each value is the core's; a value it refuses is
+ * said with the setting's label.
  */
 @Composable
 fun VoicePage(app: KaiApplication, modifier: Modifier) {
@@ -54,71 +51,65 @@ fun VoicePage(app: KaiApplication, modifier: Modifier) {
     var earcon by remember { mutableStateOf(start.voice.earcon) }
     var haptics by remember { mutableStateOf(start.voice.haptics) }
     var said by remember { mutableStateOf<String?>(null) }
-    Column(modifier.padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        Text("voice.mode", style = MaterialTheme.typography.labelLarge)
-        Choice(stringResource(R.string.voice_mode_thread), mode == VoiceMode.THREAD) { mode = VoiceMode.THREAD }
-        Choice(stringResource(R.string.voice_mode_automatic), mode == VoiceMode.AUTOMATIC) { mode = VoiceMode.AUTOMATIC }
-        Choice(stringResource(R.string.voice_mode_ptt), mode == VoiceMode.PUSH_TO_TALK) { mode = VoiceMode.PUSH_TO_TALK }
-        Field("voice.connect_timeout_s", R.string.setting_connect_timeout, connect) { connect = it }
-        Field("voice.idle_end_s", R.string.setting_idle_end, idle) { idle = it }
-        Field("voice.playout_report_ms", R.string.setting_playout_report, report) { report = it }
-        Field("voice.ptt_tail_ms", R.string.setting_ptt_tail, tail) { tail = it }
-        Text("voice.route", style = MaterialTheme.typography.labelLarge)
-        Choice(stringResource(R.string.voice_route_speaker), route == Route.SPEAKER) { route = Route.SPEAKER }
-        Choice(stringResource(R.string.voice_route_earpiece), route == Route.EARPIECE) { route = Route.EARPIECE }
-        Text("voice.echo", style = MaterialTheme.typography.labelLarge)
-        Choice(stringResource(R.string.voice_echo_auto), echo == EchoMode.AUTO) { echo = EchoMode.AUTO }
-        Choice(stringResource(R.string.voice_echo_hardware), echo == EchoMode.HARDWARE) { echo = EchoMode.HARDWARE }
-        Choice(stringResource(R.string.voice_echo_software), echo == EchoMode.SOFTWARE) { echo = EchoMode.SOFTWARE }
-        Choice(stringResource(R.string.voice_echo_half_duplex), echo == EchoMode.HALF_DUPLEX) { echo = EchoMode.HALF_DUPLEX }
-        Text(stringResource(R.string.voice_echo_note), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        Field("voice.echo_tail_ms", R.string.setting_echo_tail, echoTail) { echoTail = it }
-        Toggle("voice.earcon", earcon) { earcon = it }
-        Toggle("voice.haptics", haptics) { haptics = it }
+    Column(modifier.padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        SectionHeader(stringResource(R.string.set_voice_turns))
+        SupportingText(stringResource(R.string.set_voice_turns_help))
+        ChoiceRow(stringResource(R.string.voice_mode_thread), mode == VoiceMode.THREAD, stringResource(R.string.voice_mode_thread_help)) { mode = VoiceMode.THREAD }
+        ChoiceRow(stringResource(R.string.voice_mode_automatic), mode == VoiceMode.AUTOMATIC, stringResource(R.string.voice_mode_automatic_help)) { mode = VoiceMode.AUTOMATIC }
+        ChoiceRow(stringResource(R.string.voice_mode_ptt), mode == VoiceMode.PUSH_TO_TALK, stringResource(R.string.voice_mode_ptt_help)) { mode = VoiceMode.PUSH_TO_TALK }
+        SectionHeader(stringResource(R.string.set_voice_output))
+        SupportingText(stringResource(R.string.set_voice_output_help))
+        ChoiceRow(stringResource(R.string.voice_route_speaker), route == Route.SPEAKER) { route = Route.SPEAKER }
+        ChoiceRow(stringResource(R.string.voice_route_earpiece), route == Route.EARPIECE) { route = Route.EARPIECE }
+        SectionHeader(stringResource(R.string.set_voice_echo))
+        SupportingText(stringResource(R.string.voice_echo_note))
+        ChoiceRow(stringResource(R.string.voice_echo_auto), echo == EchoMode.AUTO, stringResource(R.string.voice_echo_auto_help)) { echo = EchoMode.AUTO }
+        ChoiceRow(stringResource(R.string.voice_echo_hardware), echo == EchoMode.HARDWARE, stringResource(R.string.voice_echo_hardware_help)) { echo = EchoMode.HARDWARE }
+        ChoiceRow(stringResource(R.string.voice_echo_software), echo == EchoMode.SOFTWARE, stringResource(R.string.voice_echo_software_help)) { echo = EchoMode.SOFTWARE }
+        ChoiceRow(stringResource(R.string.voice_echo_half_duplex), echo == EchoMode.HALF_DUPLEX, stringResource(R.string.voice_echo_half_duplex_help)) { echo = EchoMode.HALF_DUPLEX }
+        SectionHeader(stringResource(R.string.set_voice_cues))
+        SettingSwitch(stringResource(R.string.set_earcon), stringResource(R.string.set_earcon_help), earcon) { earcon = it }
+        SettingSwitch(stringResource(R.string.set_haptics), stringResource(R.string.set_haptics_help), haptics) { haptics = it }
+        AdvancedGroup {
+            SettingNumber(R.string.set_connect, R.string.set_connect_help, R.string.unit_s, connect) { connect = it }
+            SettingNumber(R.string.set_idle, R.string.set_idle_help, R.string.unit_s, idle) { idle = it }
+            SettingNumber(R.string.set_report, R.string.set_report_help, R.string.unit_ms, report) { report = it }
+            SettingNumber(R.string.set_ptt_tail, R.string.set_ptt_tail_help, R.string.unit_ms, tail, optional = true, placeholder = R.string.set_none) { tail = it }
+            SettingNumber(R.string.set_echo_tail, R.string.set_echo_tail_help, R.string.unit_ms, echoTail, optional = true, placeholder = R.string.set_lmgw_value) { echoTail = it }
+        }
         Button(onClick = {
+            val fields = listOf(
+                Triple(SettingKey.CONNECT_TIMEOUT, connect, false), Triple(SettingKey.IDLE_END, idle, false),
+                Triple(SettingKey.PLAYOUT_REPORT, report, false), Triple(SettingKey.PTT_TAIL, tail, true),
+                Triple(SettingKey.ECHO_TAIL, echoTail, true),
+            )
+            val bad = fields.firstOrNull { !WholeNumber.valid(it.second, it.third) }
+            if (bad != null) {
+                said = app.getString(R.string.set_needs_number, app.getString(bad.first.label))
+                return@Button
+            }
             scope.launch {
                 said = try {
                     val s = app.core.settings()
                     s.voice.mode = mode
-                    s.voice.connectTimeoutS = connect.trim().toUInt()
-                    s.voice.idleEndS = idle.trim().toUInt()
-                    s.voice.playoutReportMs = report.trim().toUInt()
-                    s.voice.pttTailMs = tail.trim().takeIf { it.isNotEmpty() }?.toUInt()
+                    s.voice.connectTimeoutS = WholeNumber.parse(connect)
+                    s.voice.idleEndS = WholeNumber.parse(idle)
+                    s.voice.playoutReportMs = WholeNumber.parse(report)
+                    s.voice.pttTailMs = WholeNumber.parseOptional(tail)
                     s.voice.route = route
                     s.voice.echo = echo
-                    s.voice.echoTailMs = echoTail.trim().takeIf { it.isNotEmpty() }?.toUInt()
+                    s.voice.echoTailMs = WholeNumber.parseOptional(echoTail)
                     s.voice.earcon = earcon
                     s.voice.haptics = haptics
                     app.core.setSettings(s)
                     // A changed echo setting rebuilds the factory now, not at the next call's start.
                     app.calls.refreshFactory()
                     app.getString(R.string.voice_saved)
-                } catch (e: NumberFormatException) {
-                    app.getString(R.string.voice_not_a_number)
                 } catch (e: CoreException) {
-                    e.message
+                    refusalWords(app, e)
                 }
             }
         }) { Text(stringResource(R.string.save)) }
         said?.let { Text(it, style = MaterialTheme.typography.bodyMedium) }
     }
 }
-
-@Composable
-private fun Field(key: String, help: Int, value: String, onChange: (String) -> Unit) {
-    OutlinedTextField(
-        value = value,
-        onValueChange = onChange,
-        label = { Text(key) },
-        supportingText = { Text(stringResource(help)) },
-        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-        singleLine = true,
-        modifier = Modifier.fillMaxWidth(),
-    )
-}
-
-@Composable
-private fun Choice(label: String, selected: Boolean, onSelect: () -> Unit) = LabelledRadio(label, selected, onSelect)
-
-@Composable
-private fun Toggle(key: String, on: Boolean, onChange: (Boolean) -> Unit) = LabelledSwitch(key, on, onChange)

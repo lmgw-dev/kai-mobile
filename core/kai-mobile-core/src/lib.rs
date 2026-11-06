@@ -32,6 +32,7 @@ pub mod pairing;
 mod pin;
 mod settings;
 pub mod store;
+pub mod threads;
 pub mod views;
 pub mod voice;
 

@@ -6,17 +6,28 @@
 
 use lmgw_client::requests::{ErrorFrame, LabelCode};
 
+/// The code of a background candidate alias deferred while the GPU is busy: retryable, unlike the
+/// hold (`gpu_hold`, which stays verbatim: lmgw's own words say not to retry).
+const GPU_DEFERRED: &str = "gpu_deferred";
+
 /// What a frame is to the conversation.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Said {
     /// A label's notice, in the app's words.
     Notice(String),
-    /// The turn's error, verbatim with its code.
+    /// The turn's error: verbatim with its code, except `gpu_deferred`, which the app words itself.
     Error(String),
 }
 
 /// `frame` as the conversation shows it.
 pub fn said(frame: &ErrorFrame) -> Said {
+    if frame.code.as_deref() == Some(GPU_DEFERRED) {
+        return Said::Error(format!(
+            "The GPU is busy with other work right now, so this could not be answered. Try again \
+             shortly. ({})",
+            frame.message
+        ));
+    }
     let Some(code) = frame.label_code() else {
         return Said::Error(match &frame.code {
             Some(c) => format!("{} ({c})", frame.message),
@@ -102,5 +113,19 @@ mod tests {
             Said::Error("held (gpu_hold)".into())
         );
         assert_eq!(said(&frame(None, None, "boom")), Said::Error("boom".into()));
+    }
+
+    /// The hold stays in lmgw's words with its code; a deferral (a busy GPU, retryable) is the app's own
+    /// sentence, keeping lmgw's message, which names the alias.
+    #[test]
+    fn a_deferral_is_said_in_the_apps_words_beside_the_verbatim_hold() {
+        let words = "'background' deferred: GPU in use by chat; retry later";
+        assert_eq!(
+            said(&frame(Some("gpu_deferred"), None, words)),
+            Said::Error(format!(
+                "The GPU is busy with other work right now, so this could not be answered. Try \
+                 again shortly. ({words})"
+            ))
+        );
     }
 }

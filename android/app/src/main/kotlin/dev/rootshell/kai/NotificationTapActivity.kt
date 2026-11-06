@@ -40,7 +40,11 @@ class NotificationTapActivity : Activity() {
             // A voice notice's Take over (design §7.9): the voice screen starts the call, which
             // takes the thread over as soon as lmgw asks.
             id?.let { app.notifier.withdraw(it) }
-            app.hub.pendingCall.value = CallStart(new = false, takeOver = true)
+            // Bound as the ended call was (design §7.12): the notice carries its thread, so neither a
+            // later call's end nor a restarted process changes it. A call of its own, never a move
+            // of one that runs (CallEngine.talk).
+            val thread = intent.getLongExtra(EXTRA_THREAD, 0L).takeIf { intent.hasExtra(EXTRA_THREAD) }
+            app.hub.pendingCall.value = CallStart(new = false, takeOver = true, thread = thread)
         }
         val aboutTheConversation = id?.kind == NotificationKind.APPROVAL || id?.kind == NotificationKind.REPLY
         if (aboutTheConversation && !talk) app.hub.openConversation.value = true
@@ -53,5 +57,6 @@ class NotificationTapActivity : Activity() {
         const val ACTION_TALK = "dev.rootshell.kai.action.TALK"
         const val ACTION_TAKE_OVER = "dev.rootshell.kai.action.TAKE_OVER"
         const val EXTRA_TAG = "dev.rootshell.kai.extra.NOTIFICATION_TAG"
+        const val EXTRA_THREAD = "dev.rootshell.kai.extra.THREAD"
     }
 }

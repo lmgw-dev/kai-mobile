@@ -39,7 +39,7 @@ impl NoAnswer {
         match self {
             Self::Failed(f) => format!("lmgw is not reachable: {}", f.words()),
             Self::Timeout => format!(
-                "lmgw did not answer within {} s (lmgw.timeout_s)",
+                "lmgw did not answer within {} s (Settings → Advanced connection → Wait for lmgw)",
                 timeout.as_secs()
             ),
         }
@@ -52,6 +52,7 @@ fn builder(h: &Handle, req: &Request) -> reqwest::RequestBuilder {
     let mut rb = match req.method {
         Method::Get => http.get(url),
         Method::Post => http.post(url),
+        Method::Put => http.put(url),
     };
     for header in &req.headers {
         rb = rb.header(header.name.as_str(), header.value.as_str());

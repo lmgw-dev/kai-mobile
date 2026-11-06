@@ -20,7 +20,7 @@ use std::{sync::Arc, time::Duration};
 
 use lmgw_client::{
     pairing::{FactLine, PairFacts, PairingLink},
-    requests::{self, Credentials, KeyRefused, code},
+    requests::{self, Credentials, DeviceSelf, KeyRefused, code},
 };
 
 use crate::{
@@ -106,14 +106,15 @@ impl Enroller {
         *self.pending.lock().await = None;
     }
 
-    /// Enrols with `link` (module doc). `client` is the Devices card's text ("Kai mobile 0.1.0
-    /// (Android 16)"), `timeout` `lmgw.timeout_s` (the whole race, and the answer's body),
+    /// Enrols with `link` (module doc). `device` is what the phone says of itself: its own name,
+    /// the Devices card's client text ("Kai mobile 0.1.0 (Android 16)") and the install's app id
+    /// (the Android application id, which lmgw offers transfers by), `timeout` `lmgw.timeout_s` (the whole race, and the answer's body),
     /// `stagger` `lmgw.url_stagger_ms`, `stored_alias` the stored pairing's key, which is never
     /// deleted here.
     pub async fn enrol(
         &self,
         link: &PairingLink,
-        client: &str,
+        device: DeviceSelf<'_>,
         timeout: Duration,
         stagger: Duration,
         stored_alias: Option<&str>,
@@ -146,7 +147,7 @@ impl Enroller {
         tracing::info!(alias = %key.alias, urls = link.urls.as_slice().len(), "pairing: enrolling");
         let mut retried = false;
         loop {
-            match attempt(link, &key.spki, client, timeout, stagger).await {
+            match attempt(link, &key.spki, device, timeout, stagger).await {
                 Ok(answer) => {
                     if answer.status == 429
                         && !retried
@@ -209,7 +210,7 @@ fn refused_by_code(answer: &Answer) -> bool {
 async fn attempt(
     link: &PairingLink,
     spki: &[u8],
-    client: &str,
+    device: DeviceSelf<'_>,
     timeout: Duration,
     stagger: Duration,
 ) -> Result<Answer, CoreError> {
@@ -218,7 +219,7 @@ async fn attempt(
         reason,
     })?;
     // The request carries the token: never logged.
-    let req = requests::enrol(&link.token, spki, Some(client));
+    let req = requests::enrol(&link.token, spki, device);
     let attempt = |base: &str, answered| {
         let http = tls.racing(answered);
         let url = req.url(base);
@@ -254,7 +255,7 @@ async fn attempt(
         Err(_) => Err(CoreError::Pairing {
             kind: PairingFailure::Unreachable,
             reason: format!(
-                "lmgw did not answer the enrolment within {} s (lmgw.timeout_s)",
+                "lmgw did not answer the enrolment within {} s (Settings → Advanced connection → Wait for lmgw)",
                 timeout.as_secs()
             ),
         }),

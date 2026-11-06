@@ -43,6 +43,35 @@ class CallOrderTest {
         assertEquals(CallOrder.Heard.Rebind(again), order.ended(second, end(EndReason.REBIND, again)))
     }
 
+    /**
+     * A rebind's next call refused: the old call's end is heard while no other call took over, and
+     * not once one did, whose audio it would end (review of 2026-10-19).
+     */
+    @Test
+    fun aRefusedRestartEndsOnlyItsOwnCall() {
+        val order = CallOrder()
+        val first = order.asked()
+        order.took(first, 1uL)
+        val again = CallStart(new = false, takeOver = false, thread = 12)
+        assertEquals(CallOrder.Heard.Rebind(again), order.ended(first, end(EndReason.REBIND, again)))
+        val restart = order.asked()
+        order.refused(restart)
+        val refused = end(EndReason.REFUSED)
+        assertEquals(CallOrder.Heard.Ended(refused), order.ended(first, refused))
+
+        val other = CallOrder()
+        val a = other.asked()
+        other.took(a, 1uL)
+        other.ended(a, end(EndReason.REBIND, again))
+        // Another start won the race to the core: it is the current call now.
+        val b = other.asked()
+        other.took(b, 2uL)
+        val r = other.asked()
+        other.refused(r)
+        assertNull(other.ended(a, refused))
+        assertEquals(b, other.current)
+    }
+
     @Test
     fun aRefusedStartForgetsAnEndThatCameFirst() {
         val order = CallOrder()

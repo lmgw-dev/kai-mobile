@@ -53,6 +53,7 @@ import dev.rootshell.kai.ui.currentLayout
 import dev.rootshell.kai.ui.screens.actionLabel
 import dev.rootshell.kai.ui.voiceArrangement
 import dev.rootshell.kai.voice.active
+import dev.rootshell.kai.voice.moving
 import java.text.DateFormat
 import java.util.Date
 
@@ -95,6 +96,7 @@ fun VoicePane(
     modifier: Modifier = Modifier,
     onOpenConversation: (() -> Unit)?,
     onSetup: () -> Unit,
+    onOpenThread: (Long) -> Unit,
 ) {
     val view by app.hub.voice.collectAsStateWithLifecycle()
     val captions by app.hub.captions.collectAsStateWithLifecycle()
@@ -187,6 +189,18 @@ fun VoicePane(
             }
             LinkActions(connection, onAction, onSetup)
         }
+        // A call bound to an opened thread (design §7.12): back to that thread, and Stay while a
+        // Talk elsewhere waits for the quiet point. Neither while a move goes (the old call ended).
+        val bound = v?.bindThread?.takeIf { inCall && !v.moving() }
+        val leaving = v?.takeIf { inCall && it.switching != null }?.call
+        if (bound != null || leaving != null) {
+            ButtonRow(Modifier.padding(top = 8.dp)) {
+                if (leaving != null) {
+                    OutlinedButton(onClick = { stay(app, leaving) }) { Text(stringResource(R.string.voice_stay)) }
+                }
+                if (bound != null) TextButton(onClick = { onOpenThread(bound) }) { Text(stringResource(R.string.open_thread)) }
+            }
+        }
         if (onOpenConversation != null && paired) {
             TextButton(onClick = onOpenConversation, modifier = Modifier.padding(top = 8.dp)) {
                 Text(stringResource(R.string.open_conversation))
@@ -254,12 +268,7 @@ private fun LinkFacts(connection: ConnectionView?) {
         Line(stringResource(R.string.next_try, DateFormat.getTimeInstance(DateFormat.MEDIUM).format(Date(at))))
     }
     connection?.detail?.forEach { Line(it) }
-    if (connection?.held == true) {
-        Line(
-            connection.holdFallback?.let { stringResource(R.string.hold_badge_fallback, it) } ?: stringResource(R.string.hold_badge),
-            amber = true,
-        )
-    }
+    if (connection?.held == true) Line(stringResource(R.string.hold_badge), amber = true)
     connection?.certNotice?.let { Line(it, amber = true) }
 }
 

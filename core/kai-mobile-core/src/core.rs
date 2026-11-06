@@ -3,6 +3,8 @@
 //! approvals, notifications). Each entry point sends the link's actor a message (a synchronous one
 //! returns at once, an async one awaits the answer), so none waits behind a lock.
 
+mod threads;
+
 use std::{
     fs,
     path::{Path, PathBuf},
@@ -11,6 +13,7 @@ use std::{
 };
 
 use arc_swap::ArcSwap;
+use lmgw_client::requests::DeviceSelf;
 use tokio::{
     runtime::Handle,
     sync::{mpsc, oneshot},
@@ -47,6 +50,14 @@ pub struct PlatformFacts {
     pub os: String,
     /// The app's version name.
     pub app_version: String,
+    /// The app's own id (the Android application id, `dev.rootshell.kai`; a debug build's ends in
+    /// `.dev`), sent at enrolment: lmgw shows it on the Devices card and offers device transfers
+    /// only to devices that have one. It takes effect at the next pairing.
+    pub app_id: String,
+    /// The name the user gave this phone ("Anna's phone"; Android's Settings.Global.DEVICE_NAME, else
+    /// the model name), sent at enrolment as the device's own claim: lmgw's Devices card shows it
+    /// beside the client text. `None` when the platform has none. It takes effect at the next pairing.
+    pub device_name: Option<String>,
     /// The approval ids of the system's active notifications at start (§5.4: the notified ids
     /// outlive the process, and the first feed's reader must know them).
     pub notified_approvals: Vec<String>,
@@ -348,11 +359,23 @@ impl Core {
         let timeout = Duration::from_secs(u64::from(s.lmgw.timeout_s));
         let stagger = Duration::from_millis(u64::from(s.lmgw.url_stagger_ms));
         let client = self.client_text();
+        let app_id = self.facts.app_id.clone();
+        let device_name = self.facts.device_name.clone();
         let enroller = self.enroller.clone();
         let cmds = self.cmds.clone();
         self.on_rt(async move {
             let enrolled = enroller
-                .enrol(&link, &client, timeout, stagger, alias.as_deref())
+                .enrol(
+                    &link,
+                    DeviceSelf {
+                        name: device_name.as_deref(),
+                        client: Some(&client),
+                        app_id: Some(&app_id),
+                    },
+                    timeout,
+                    stagger,
+                    alias.as_deref(),
+                )
                 .await?;
             let (reply, rx) = oneshot::channel();
             let _ = cmds.send(Cmd::Paired {
@@ -429,25 +452,7 @@ impl Core {
                 let _ = frames.send(Cmd::SendFrame(f));
             })
             .await;
-            let out = match &result {
-                Ok(()) => Ok(()),
-                Err(send::StreamFail::Refused { error, status }) => Err(CoreError::Refused {
-                    code: error.code.clone(),
-                    reason: error.message.clone(),
-                    hint: (*status == 429 && error.code == "key_rate").then(|| {
-                        "a voice call holds one of this device's concurrency slots for its life"
-                            .to_owned()
-                    }),
-                }),
-                Err(send::StreamFail::NoAnswer(n)) => Err(CoreError::Unreachable {
-                    reason: n.words(timeout),
-                    setting: Some("lmgw.timeout_s".to_owned()),
-                }),
-                Err(send::StreamFail::Broke(why)) => Err(CoreError::Unreachable {
-                    reason: format!("the reply broke off: {why}"),
-                    setting: None,
-                }),
-            };
+            let out = stream_result(&result, timeout);
             let _ = cmds.send(Cmd::SendEnded {
                 identity: h.identity(),
                 result,
@@ -545,6 +550,32 @@ impl Core {
             kind: id.kind,
             key: id.key,
         });
+    }
+}
+
+/// What a send's stream answers Kotlin (§6.3): lmgw's refusal verbatim (with the hint that a call
+/// holds a concurrency slot at the key's limit), no answer with the bound's setting.
+fn stream_result(
+    result: &Result<(), send::StreamFail>,
+    timeout: Duration,
+) -> Result<(), CoreError> {
+    match result {
+        Ok(()) => Ok(()),
+        Err(send::StreamFail::Refused { error, status }) => Err(CoreError::Refused {
+            code: error.code.clone(),
+            reason: error.message.clone(),
+            hint: (*status == 429 && error.code == "key_rate").then(|| {
+                "a voice call holds one of this device's concurrency slots for its life".to_owned()
+            }),
+        }),
+        Err(send::StreamFail::NoAnswer(n)) => Err(CoreError::Unreachable {
+            reason: n.words(timeout),
+            setting: Some("lmgw.timeout_s".to_owned()),
+        }),
+        Err(send::StreamFail::Broke(why)) => Err(CoreError::Unreachable {
+            reason: format!("the reply broke off: {why}"),
+            setting: None,
+        }),
     }
 }
 

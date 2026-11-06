@@ -122,15 +122,13 @@ impl Replies {
     }
 
     /// The catch-up is over and the Kai folder's threads are known: one notification per thread
-    /// collected (unless `quiet`), with its latest reply and the count.
-    pub fn flush(&mut self, quiet: bool, kai: impl Fn(i64) -> bool) -> Vec<Update> {
+    /// collected (unless `quiet` for it: the app is visible, or the owner hears that thread in the
+    /// phone's call), with its latest reply and the count.
+    pub fn flush(&mut self, quiet: impl Fn(i64) -> bool, kai: impl Fn(i64) -> bool) -> Vec<Update> {
         let collected = std::mem::take(&mut self.collecting);
-        if quiet {
-            return Vec::new();
-        }
         let mut out = Vec::new();
         for (thread, mut r) in collected {
-            if !kai(thread) || r.count == 0 {
+            if quiet(thread) || !kai(thread) || r.count == 0 {
                 continue;
             }
             if let Some(old) = self.shown.get(&thread) {
@@ -230,7 +228,7 @@ mod tests {
             r.message(&added(9, 3, "other"), false, true, false, |_| true)
                 .is_empty()
         );
-        let out = r.flush(false, |t| t == 7);
+        let out = r.flush(|_| false, |t| t == 7);
         let [Update::Notify { notification: n }] = out.as_slice() else {
             panic!("{out:?}")
         };
@@ -248,6 +246,21 @@ mod tests {
             "visible"
         );
         assert_eq!(r.opened(7).len(), 1);
+    }
+
+    /// A resync's flush during a thread's call (§7.12): only the thread the owner hears stays
+    /// quiet; the Kai conversation's collected reply notifies.
+    #[test]
+    fn a_flush_is_quiet_only_for_the_threads_the_owner_hears() {
+        let mut r = Replies::default();
+        r.message(&added(7, 1, "kai"), false, true, false, |_| true);
+        r.message(&added(12, 2, "heard"), false, true, false, |_| true);
+        let out = r.flush(|t| t == 12, |_| true);
+        let [Update::Notify { notification: n }] = out.as_slice() else {
+            panic!("{out:?}")
+        };
+        assert_eq!((n.thread_id, n.text.as_str()), (Some(7), "kai"));
+        assert!(r.flush(|_| true, |_| true).is_empty(), "nothing collected");
     }
 
     #[test]

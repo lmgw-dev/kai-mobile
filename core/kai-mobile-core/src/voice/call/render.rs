@@ -96,8 +96,8 @@ impl Call {
         let note = match (&self.transport_note, ptt, self.facts.ptt_tail_ms) {
             (Some(t), _, _) => Some(t.clone()),
             (None, true, None) => Some(
-                "push-to-talk keeps no tail after the release: voice.ptt_tail_ms is not set (WP0 \
-                 (g) measures it), so the last syllable may be cut"
+                "push-to-talk keeps no tail after the release (Settings → Voice → Push-to-talk tail \
+                 is not set), so the last syllable may be cut"
                     .to_owned(),
             ),
             _ => None,
@@ -122,13 +122,19 @@ impl Call {
             taking_over: self.taking_over,
             pending_note: self.pending_note.clone(),
             waiting_for,
+            bind_thread: self.start.thread,
+            switching: self.switch.filter(|_| !self.over()),
             thread_id: self.thread.as_ref().map(|(id, _)| *id),
             thread_title: self.thread.as_ref().map(|(_, t)| t.clone()),
             tool: self.tool.clone(),
             awaiting,
             hold: self.hold,
-            hold_fallback: self.hold_fallback.clone(),
             held_stage: self.held_stage.clone(),
+            fallback_stages: self
+                .fallback_stages
+                .iter()
+                .map(|(_, l)| l.clone())
+                .collect(),
             error: self.error.clone(),
             note,
             end: self.end.clone(),

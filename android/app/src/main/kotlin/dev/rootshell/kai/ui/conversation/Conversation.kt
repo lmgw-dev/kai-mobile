@@ -12,6 +12,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -40,6 +41,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.rootshell.kai.KaiApplication
 import dev.rootshell.kai.R
+import dev.rootshell.kai.app.ThreadRules
 import dev.rootshell.kai.core.ffi.ConversationStatus
 import dev.rootshell.kai.core.ffi.CoreException
 import dev.rootshell.kai.core.ffi.MessageView
@@ -65,34 +67,28 @@ import kotlinx.coroutines.launch
  * budget and logged (§10.4).
  */
 @Composable
-fun ConversationPane(app: KaiApplication, modifier: Modifier = Modifier) {
+fun ConversationPane(app: KaiApplication, modifier: Modifier = Modifier, onOpenThreads: (() -> Unit)? = null) {
     val hub = app.hub
     val core = app.core
     val conversation by hub.conversation.collectAsStateWithLifecycle()
     val messages by hub.messages.collectAsStateWithLifecycle()
     val approvals by hub.approvals.collectAsStateWithLifecycle()
     val connection by hub.connection.collectAsStateWithLifecycle()
-    val decider = rememberApprovalDecider(app)
     val scope = rememberCoroutineScope()
     var draft by rememberSaveable { mutableStateOf("") }
     var error by remember { mutableStateOf<String?>(null) }
-    val list = rememberLazyListState()
-    val placement = ApprovalRules.place(approvals, messages.map { it.id })
-    // Following the end: set by where each scroll left the list (the follow's own scroll ends at
-    // the end, so it stays set), and again when another thread or call shows and at the owner's
-    // own send.
-    var follow by remember { mutableStateOf(true) }
+    val follow = remember { FollowEnd() }
     val call by remember(hub) { hub.voice.map { it?.call }.distinctUntilChanged() }.collectAsStateWithLifecycle(null)
-    LaunchedEffect(conversation?.threadId, call) { follow = true }
-    LaunchedEffect(list) {
-        snapshotFlow { list.isScrollInProgress }.collect { scrolling -> if (!scrolling) follow = !list.canScrollForward }
-    }
-    LaunchedEffect(messages.size, messages.lastOrNull()?.text?.length, approvals.size, follow) {
-        if (follow) followEnd(list)
-    }
-    ScrollFrameWatch(list, "conversation")
+    // A send here stops the voice turn of a call bound by the folder (design §6.3, §7.12).
+    val stopsVoice by remember(hub) { hub.voice.map { ThreadRules.sendStopsVoice(it, null) }.distinctUntilChanged() }
+        .collectAsStateWithLifecycle(false)
     Column(modifier.imePadding()) {
         Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+            if (onOpenThreads != null) {
+                IconButton(onClick = onOpenThreads) {
+                    Icon(Icons.AutoMirrored.Filled.List, contentDescription = stringResource(R.string.open_threads))
+                }
+            }
             Text(
                 conversation?.threadTitle ?: stringResource(R.string.conversation_title),
                 style = MaterialTheme.typography.titleLarge,
@@ -114,54 +110,147 @@ fun ConversationPane(app: KaiApplication, modifier: Modifier = Modifier) {
             }
         }
         Banners(conversation, connection?.held == true, connection?.paired == true)
-        LazyColumn(state = list, modifier = Modifier.weight(1f).fillMaxWidth(), contentPadding = PaddingValues(16.dp)) {
-            if (messages.isEmpty() && conversation?.status == ConversationStatus.READY) {
-                item { Text(stringResource(R.string.conversation_no_messages), color = MaterialTheme.colorScheme.onSurfaceVariant) }
-            }
-            messages.forEach { m ->
-                item(key = m.id, contentType = "message") { MessageRow(m) }
-                placement.after[m.id]?.forEach { a ->
-                    item(key = "approval:${a.approvalRequestId}", contentType = "approval") {
-                        ApprovalCard(a, decider, Modifier.padding(vertical = 4.dp))
-                    }
+        MessagesColumn(
+            app = app,
+            messages = messages,
+            approvals = approvals,
+            follow = follow,
+            // Following starts again when another thread or call shows.
+            restartKey = conversation?.threadId to call,
+            empty = if (conversation?.status == ConversationStatus.READY) stringResource(R.string.conversation_no_messages) else null,
+            watch = "conversation",
+            modifier = Modifier.weight(1f).fillMaxWidth(),
+        )
+        error?.let {
+            Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(horizontal = 16.dp))
+        }
+        val note = if (stopsVoice) stringResource(R.string.send_stops_voice) else null
+        MessageInput(draft, { draft = it }, sending = conversation?.sending == true, note = note) {
+            val text = draft
+            draft = ""
+            error = null
+            follow.on = true
+            scope.launch {
+                try {
+                    core.sendText(text)
+                } catch (e: CoreException) {
+                    error = e.message
+                    // A send that never started keeps its text.
+                    if (draft.isEmpty() && (e is CoreException.NotConnected || e is CoreException.NotReady)) draft = text
                 }
             }
-            placement.end.forEach { a ->
+        }
+    }
+}
+
+/** Whether a message list follows its end (§10.4's note), kept by [MessagesColumn]. */
+class FollowEnd {
+    var on by mutableStateOf(true)
+}
+
+/**
+ * A thread's messages with their approval cards at their messages (§11), following the end only
+ * while the owner is there: set by where each scroll left the list (the follow's own scroll ends at
+ * the end, so it stays set), and again when [restartKey] changes and at the owner's own send
+ * ([FollowEnd.on]). [scrollTo] puts a message in view once it is there (a search hit's), which
+ * stops the following. Each scroll's frames are logged under [watch] (§10.4).
+ */
+@Composable
+fun MessagesColumn(
+    app: KaiApplication,
+    messages: List<MessageView>,
+    approvals: List<dev.rootshell.kai.core.ffi.ApprovalView>,
+    follow: FollowEnd,
+    restartKey: Any?,
+    empty: String?,
+    watch: String,
+    modifier: Modifier = Modifier,
+    scrollTo: Long? = null,
+) {
+    val decider = rememberApprovalDecider(app)
+    val list = rememberLazyListState()
+    val placement = ApprovalRules.place(approvals, messages.map { it.id })
+    LaunchedEffect(restartKey) { follow.on = scrollTo == null }
+    LaunchedEffect(list) {
+        snapshotFlow { list.isScrollInProgress }.collect { scrolling -> if (!scrolling) follow.on = !list.canScrollForward }
+    }
+    LaunchedEffect(messages.size, messages.lastOrNull()?.text?.length, approvals.size, follow.on) {
+        if (follow.on) followEnd(list)
+    }
+    var scrolled by remember(scrollTo) { mutableStateOf(false) }
+    LaunchedEffect(scrollTo, messages.size) {
+        if (scrollTo == null || scrolled) return@LaunchedEffect
+        val index = itemIndex(messages, placement, scrollTo)
+        if (index != null) {
+            list.scrollToItem(index)
+            scrolled = true
+            follow.on = false
+        }
+    }
+    ScrollFrameWatch(list, watch)
+    LazyColumn(state = list, modifier = modifier, contentPadding = PaddingValues(16.dp)) {
+        if (messages.isEmpty() && empty != null) {
+            item { Text(empty, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+        }
+        messages.forEach { m ->
+            item(key = m.id, contentType = "message") { MessageRow(m) }
+            placement.after[m.id]?.forEach { a ->
                 item(key = "approval:${a.approvalRequestId}", contentType = "approval") {
                     ApprovalCard(a, decider, Modifier.padding(vertical = 4.dp))
                 }
             }
         }
-        error?.let {
-            Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(horizontal = 16.dp))
+        placement.end.forEach { a ->
+            item(key = "approval:${a.approvalRequestId}", contentType = "approval") {
+                ApprovalCard(a, decider, Modifier.padding(vertical = 4.dp))
+            }
         }
-        Row(Modifier.fillMaxWidth().padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
-            OutlinedTextField(
-                value = draft,
-                onValueChange = { draft = it },
-                placeholder = { Text(stringResource(R.string.message_hint)) },
-                modifier = Modifier.weight(1f),
-                maxLines = 6,
-            )
-            val sending = conversation?.sending == true
-            IconButton(
-                enabled = draft.isNotBlank() && !sending,
-                onClick = {
-                    val text = draft
-                    draft = ""
-                    error = null
-                    follow = true
-                    scope.launch {
-                        try {
-                            core.sendText(text)
-                        } catch (e: CoreException) {
-                            error = e.message
-                            // A send that never started keeps its text.
-                            if (draft.isEmpty() && (e is CoreException.NotConnected || e is CoreException.NotReady)) draft = text
-                        }
-                    }
-                },
-            ) { Icon(Icons.AutoMirrored.Filled.Send, contentDescription = stringResource(R.string.send)) }
+    }
+}
+
+/** The list index of message `id` among the items [MessagesColumn] lays out, or null when it is not there. */
+private fun itemIndex(messages: List<MessageView>, placement: ApprovalRules.Placement, id: Long): Int? {
+    var index = 0
+    for (m in messages) {
+        if (m.id == id) return index
+        index += 1 + (placement.after[m.id]?.size ?: 0)
+    }
+    return null
+}
+
+/**
+ * The text field following the IME, and Send (disabled while a send streams or the text is blank).
+ * [note] is a line above it (a send stopping the call's voice turn, design §6.3); [leading] sits
+ * before the field (an opened thread's Talk, §7.12).
+ */
+@Composable
+fun MessageInput(
+    draft: String,
+    onDraft: (String) -> Unit,
+    sending: Boolean,
+    note: String? = null,
+    leading: (@Composable () -> Unit)? = null,
+    onSend: () -> Unit,
+) {
+    note?.let {
+        Text(
+            it,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 4.dp),
+        )
+    }
+    Row(Modifier.fillMaxWidth().padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
+        leading?.invoke()
+        OutlinedTextField(
+            value = draft,
+            onValueChange = onDraft,
+            placeholder = { Text(stringResource(R.string.message_hint)) },
+            modifier = Modifier.weight(1f),
+            maxLines = 6,
+        )
+        IconButton(enabled = draft.isNotBlank() && !sending, onClick = onSend) {
+            Icon(Icons.AutoMirrored.Filled.Send, contentDescription = stringResource(R.string.send))
         }
     }
 }
@@ -188,7 +277,7 @@ private fun Banners(conversation: dev.rootshell.kai.core.ffi.ConversationView?, 
 }
 
 @Composable
-private fun MessageRow(m: MessageView) {
+fun MessageRow(m: MessageView) {
     val mine = m.role == Role.USER
     // TalkBack reads who said it first, then the message as one item (its links stay their own).
     val who = stringResource(if (mine) R.string.caption_owner else R.string.caption_kai)

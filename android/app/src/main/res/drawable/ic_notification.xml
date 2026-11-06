@@ -1,13 +1,28 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Kai's ring as the status bar's monochrome icon. -->
+<!-- Kai's mark as the status bar's small icon: one colour, as Android requires. -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="24dp"
     android:height="24dp"
     android:viewportWidth="24"
     android:viewportHeight="24">
-    <path
-        android:fillColor="#00000000"
-        android:pathData="M12,12m-8,0a8,8 0,1 1,16 0a8,8 0,1 1,-16 0"
-        android:strokeColor="#FFFFFFFF"
-        android:strokeWidth="3" />
+    <group
+        android:scaleX="0.03179"
+        android:scaleY="0.03179"
+        android:translateX="-4.2775"
+        android:translateY="-4.2775">
+        <path
+            android:fillColor="#00000000"
+            android:pathData="M512,512m-300,0a300,300 0,1 1,600 0a300,300 0,1 1,-600 0"
+            android:strokeColor="#FFFFFFFF"
+            android:strokeWidth="92" />
+        <path
+            android:fillColor="#FFFFFFFF"
+            android:pathData="M324,462a42,42 0 0,1 84,0v100a42,42 0 0,1 -84,0z" />
+        <path
+            android:fillColor="#FFFFFFFF"
+            android:pathData="M462,374a50,50 0 0,1 100,0v276a50,50 0 0,1 -100,0z" />
+        <path
+            android:fillColor="#FFFFFFFF"
+            android:pathData="M616,462a42,42 0 0,1 84,0v100a42,42 0 0,1 -84,0z" />
+    </group>
 </vector>

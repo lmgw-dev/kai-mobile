@@ -77,6 +77,8 @@ pub struct State {
     /// How many of the next folder lists, and thread lists, answer 500 instead.
     pub fail_folders: usize,
     pub fail_threads: usize,
+    /// What every thread list answers (status, JSON body) while set, before the default.
+    pub threads_answer: Option<(u16, String)>,
     /// What the next calls POSTs answer (status, JSON body) before the default: 201 with a call
     /// (`rtc_<n>`, an SDP answer advertising 262144 bytes).
     pub call_answers: VecDeque<(u16, String)>,
@@ -84,6 +86,10 @@ pub struct State {
     pub calls: usize,
     /// What a hangup answers; 0 = 200.
     pub hangup_status: u16,
+    /// The archived threads (`GET /chat/api/threads?archived=1`).
+    pub archived: Vec<ThreadRow>,
+    /// What a search answers (the JSON body); `None` is an empty page.
+    pub search: Option<String>,
     pub log: Vec<Req>,
 }
 
@@ -237,6 +243,80 @@ pub fn message(id: i64, thread: i64, role: &str, content: &str) -> Message {
     }
 }
 
+pub fn detail_of(row: ThreadRow, messages: Vec<Message>) -> ThreadDetail {
+    ThreadDetail {
+        thread: Thread {
+            row,
+            ..Default::default()
+        },
+        messages,
+        ..Default::default()
+    }
+}
+
+/// Pin, archive, move or delete on the mock's threads, as lmgw answers them (a temporary thread
+/// refused with 409, an unknown one with 404).
+fn thread_action(st: &mut State, route: &str, body: &[u8]) -> Action {
+    let rest = route.trim_start_matches("/chat/api/threads/");
+    let (id, what) = rest.split_once('/').unwrap_or_default();
+    let id: i64 = id.parse().unwrap_or(0);
+    if id < 0 {
+        return Action::Reply(answer(
+            409,
+            r#"{"code":"temporary_thread","message":"a temporary chat cannot be changed"}"#,
+            false,
+        ));
+    }
+    let Some(i) = st.threads.iter().position(|t| t.id == id) else {
+        return Action::Reply(answer(
+            404,
+            r#"{"code":"not_found","message":"no thread"}"#,
+            false,
+        ));
+    };
+    let v: serde_json::Value = serde_json::from_slice(body).unwrap_or_default();
+    if what == "delete" {
+        st.threads.remove(i);
+        st.details.remove(&id);
+        return Action::Reply(answer(200, r#"{"ok":true}"#, false));
+    }
+    let t = &mut st.threads[i];
+    match what {
+        "pin" => t.pinned = v["pinned"].as_bool().unwrap_or_default(),
+        "title" => {
+            let title = v["title"].as_str().unwrap_or_default().trim();
+            if title.is_empty() {
+                return Action::Reply(answer(
+                    400,
+                    r#"{"code":"bad_request","message":"a title cannot be empty"}"#,
+                    false,
+                ));
+            }
+            t.title = title.into();
+        }
+        "archive" => {
+            t.archived_at = v["archived"]
+                .as_bool()
+                .unwrap_or_default()
+                .then(|| "2026-10-19 09:00:00".to_owned())
+        }
+        _ => t.folder_id = v["folder_id"].as_i64(),
+    }
+    let row = t.clone();
+    if let Some(d) = st.details.get_mut(&id) {
+        d.thread.row = row.clone();
+    }
+    Action::Reply(answer(
+        200,
+        &serde_json::to_string(&Thread {
+            row,
+            ..Default::default()
+        })
+        .unwrap(),
+        false,
+    ))
+}
+
 fn answer(status: u16, body: &str, close: bool) -> String {
     format!(
         "HTTP/1.1 {status} X\r\ncontent-type: application/json\r\ncontent-length: {}\r\n{}\r\n{body}",
@@ -343,6 +423,10 @@ async fn serve<S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send>(
                     st.fail_folders -= 1;
                     Action::Reply(answer(500, BROKEN, false))
                 }
+                ("GET", "/chat/api/threads") if st.threads_answer.is_some() => {
+                    let (status, body) = st.threads_answer.clone().unwrap();
+                    Action::Reply(answer(status, &body, false))
+                }
                 ("GET", "/chat/api/threads") if st.fail_threads > 0 => {
                     st.fail_threads -= 1;
                     Action::Reply(answer(500, BROKEN, false))
@@ -366,15 +450,61 @@ async fn serve<S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send>(
                     st.folders.push(f.clone());
                     Action::Reply(answer(201, &serde_json::to_string(&f).unwrap(), false))
                 }
-                ("GET", "/chat/api/threads") => Action::Reply(answer(
+                ("GET", "/chat/api/threads") => {
+                    let archived = path.contains("archived=1");
+                    Action::Reply(answer(
+                        200,
+                        &serde_json::to_string(&ThreadList {
+                            threads: if archived {
+                                st.archived.clone()
+                            } else {
+                                st.threads.clone()
+                            },
+                            archived_count: st.archived.len() as i64,
+                            folders: st.folders.clone(),
+                            ..Default::default()
+                        })
+                        .unwrap(),
+                        false,
+                    ))
+                }
+                ("GET", "/chat/api/search") => Action::Reply(answer(
                     200,
-                    &serde_json::to_string(&ThreadList {
-                        threads: st.threads.clone(),
-                        ..Default::default()
-                    })
-                    .unwrap(),
+                    st.search
+                        .as_deref()
+                        .unwrap_or(r#"{"total_threads":0,"threads":[],"next_offset":null}"#),
                     false,
                 )),
+                ("POST", "/chat/api/threads") => {
+                    let v: serde_json::Value = serde_json::from_slice(&body).unwrap_or_default();
+                    let id = st.threads.iter().map(|t| t.id).max().unwrap_or(0) + 1;
+                    let row = ThreadRow {
+                        id,
+                        title: "New chat".into(),
+                        model_alias: v["model_alias"].as_str().unwrap_or_default().into(),
+                        folder_id: v["folder_id"].as_i64(),
+                        ..Default::default()
+                    };
+                    st.threads.insert(0, row.clone());
+                    st.details.insert(id, detail_of(row.clone(), Vec::new()));
+                    Action::Reply(answer(
+                        201,
+                        &serde_json::to_string(&Thread {
+                            row,
+                            ..Default::default()
+                        })
+                        .unwrap(),
+                        false,
+                    ))
+                }
+                ("POST", r)
+                    if r.starts_with("/chat/api/threads/")
+                        && ["/pin", "/archive", "/move", "/title", "/delete"]
+                            .iter()
+                            .any(|a| r.ends_with(a)) =>
+                {
+                    thread_action(&mut st, r, &body)
+                }
                 ("POST", r) if r.ends_with("/current") => {
                     let new = String::from_utf8_lossy(&body).contains("true");
                     if new && let Some(t) = st.new_thread {

@@ -166,6 +166,18 @@ impl Call {
                 {
                     self.held_stage = None;
                 }
+                // A stage's later state replaces what it said before; only a fallback stays shown.
+                let at = self.fallback_stages.iter().position(|(s, _)| *s == m.stage);
+                if m.state == "fallback" {
+                    let by = m.answered_by.as_deref().unwrap_or("a fallback");
+                    let line = format!("{} {}: {by} answers in its place", m.stage, m.alias);
+                    match at {
+                        Some(i) => self.fallback_stages[i].1 = line,
+                        None => self.fallback_stages.push((m.stage, line)),
+                    }
+                } else if let Some(i) = at {
+                    self.fallback_stages.remove(i);
+                }
             }
             ServerEvent::Timing(t) => {
                 let fallback = t
@@ -239,7 +251,7 @@ impl Call {
         if let Some(t) = f.thread {
             tracing::info!(call = self.n, thread = t.id, "voice: bound");
             self.thread_at_bind = self.conversation_thread;
-            if self.conversation_thread != Some(t.id) {
+            if !self.by_thread() && self.conversation_thread != Some(t.id) {
                 // The folder rolled over at the bind: the conversation follows (§6.2).
                 self.out.push(Effect::FollowThread(t.id));
             }
@@ -313,7 +325,11 @@ impl Call {
     /// `lmgw.session.closed` (§7.8): why lmgw ends the call.
     fn session_closed(&mut self, c: SessionClosed, now: u64) {
         let close = realtime::call_close(&c);
-        let end = ends::closed(&close, c.kind.as_str(), self.refusal.as_deref());
+        let end = self.thread_end(ends::closed(
+            &close,
+            c.kind.as_str(),
+            self.refusal.as_deref(),
+        ));
         if let CloseKind::Revoked { kind } = &close.kind {
             self.out
                 .push(Effect::Revoked(kind.clone(), close.message.clone()));

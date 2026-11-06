@@ -11,4 +11,6 @@ mod pin;
 mod pki;
 mod rig;
 mod settings;
+mod threads;
 mod voice;
+mod voice_thread;

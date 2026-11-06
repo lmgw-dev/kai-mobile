@@ -15,6 +15,11 @@ ongoing conversation, held in lmgw's Chat, now on your phone. Kotlin and Compose
 
 - **Talk to Kai.** Voice calls over WebRTC, with the speech recognition, the chat model and the voice
   all coming from your lmgw. Or type: the conversation is the one you also read in lmgw's dashboard.
+- **All your Chat threads.** A Threads page lists lmgw's folders and threads in lmgw's order. Open
+  one to read and write in it, search across them, and pin, archive, move, rename or delete a thread
+  from its menu. On a foldable or a wide screen the list and the thread sit side by side.
+- **Voice in any thread.** **Talk** beside an opened thread starts a call there, or moves the running
+  call to it. There is one call at a time.
 - **Assistant mode.** Kai can be Android's voice assistant, started from the assist gesture, a Quick
   Settings tile or a launcher shortcut.
 - **Notifications from your gateway.** The app holds lmgw's Chat feed open while the phone is paired,
@@ -27,14 +32,19 @@ Kai mobile runs no models itself and has no account. Without an lmgw to pair wit
 
 ## Status
 
-Alpha, and this is the first public release (0.1.0). It is built against a pinned lmgw (`LMGW_PIN`)
+Alpha. It is built against a pinned lmgw (`LMGW_PIN`)
 and has had little time on real phones, so expect rough edges. Settings, screens and the wire to
 lmgw can still change between releases. Bug reports are welcome as issues.
+
+Not built yet: images and attachments in messages, a spoken yes or no for approvals, a local
+message cache, Markdown tables, phone tools, screen context for the assistant, the lock screen as a
+place to talk, and automatic certificate renewal. There is no iOS app.
 
 ## What it needs
 
 - **Android 12 (API 31) or later**, 64-bit ARM (`arm64-v8a`; the release APK carries nothing else).
-- **lmgw 0.5.0 or later**, with its device link (the next sections pair it).
+- **lmgw 0.6.0 or later**, with its device link (the next sections pair it), a Chat model, and for
+  voice speech-to-text and text-to-speech models.
 - **A network path from the phone to lmgw's device port**: the same Wi-Fi, or a VPN such as
   WireGuard. A pairing link can carry several addresses (LAN, VPN) and the app uses whichever
   answers. The device port is a TLS listener of its own, next to the dashboard's port, so the host

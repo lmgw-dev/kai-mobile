@@ -47,11 +47,13 @@ import dev.rootshell.kai.R
 import dev.rootshell.kai.TalkActivity
 import dev.rootshell.kai.core.ffi.CallStart
 import dev.rootshell.kai.ui.Layout
+import dev.rootshell.kai.app.ThreadTarget
 import dev.rootshell.kai.ui.Routes
 import dev.rootshell.kai.ui.approvals.ApprovalRules
 import dev.rootshell.kai.ui.layoutForWidthDp
 import dev.rootshell.kai.ui.theme.KaiTheme
 import dev.rootshell.kai.voice.active
+import dev.rootshell.kai.voice.moving
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
@@ -265,9 +267,21 @@ class KaiSession(context: Context) :
      */
     private fun handOver(into: Into, target: Class<*>) {
         expandError.value = null
+        // Keyboard on a call bound to an opened thread opens that thread (design §7.12); while a
+        // move goes, the thread it goes to.
+        val call = app.hub.voice.value?.takeIf { it.active() }
+        val bound = if (call.moving()) call?.end?.restart?.thread else call?.bindThread
+        val thread = bound?.takeIf { into == Into.CONVERSATION }
+        // What the browser had selected, put back if no path opens the app.
+        val before = app.hub.selected.value
         if (target == MainActivity::class.java) {
-            app.hub.pendingRoute.value = Routes.MAIN
-            if (into == Into.CONVERSATION) app.hub.openConversation.value = true
+            if (thread != null) {
+                app.hub.select(ThreadTarget(thread))
+                app.hub.pendingRoute.value = Routes.THREADS
+            } else {
+                app.hub.pendingRoute.value = Routes.MAIN
+                if (into == Into.CONVERSATION) app.hub.openConversation.value = true
+            }
         }
         val intent = Intent(context, target)
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
@@ -282,6 +296,8 @@ class KaiSession(context: Context) :
                     Log.w(TAG, "assist: no path opened the app; the overlay keeps the call")
                     app.hub.pendingRoute.value = null
                     app.hub.openConversation.value = false
+                    // Only this handover's own selection is undone (the owner may have chosen since).
+                    if (thread != null && app.hub.selected.value == ThreadTarget(thread)) app.hub.select(before)
                     expandError.value = context.getString(R.string.overlay_expand_failed)
                 }
             }

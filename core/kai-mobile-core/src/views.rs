@@ -3,6 +3,7 @@
 //! ids (the messages), so a collector that falls behind merges them and loses nothing.
 
 use crate::markdown::MdBlock;
+pub use crate::threads::view::{BrowserView, OpenedView};
 pub use crate::voice::view::{CaptionLine, VoiceView};
 
 /// One update (design §3.2).
@@ -33,6 +34,12 @@ pub enum Update {
     Voice { view: VoiceView },
     /// One caption line of the call, new or changed (§7.6), by `(call, id)`.
     Caption { line: CaptionLine },
+    /// The threads browser's lists (§6.4), whole, while it shows.
+    Browser { view: BrowserView },
+    /// The opened thread (§6.4), whole; `None` once it closed.
+    Opened { view: Option<OpenedView> },
+    /// The opened thread's messages changed, as `Messages` carries the Kai thread's.
+    OpenedMessages { delta: MessagesDelta },
 }
 
 /// The connection's states, first match wins (design §5.3).
@@ -116,9 +123,9 @@ pub struct ConnectionView {
     pub device_name: Option<String>,
     /// When the next try runs, unix milliseconds; `None` when none is scheduled.
     pub next_try_at_ms: Option<i64>,
-    /// The GPU hold is on (a badge on any state): local models are paused.
+    /// The GPU hold is on (a badge on any state): local models are paused. Which model answers
+    /// for a held one is its own fallback's, said per turn ("answered by <alias> (fallback)").
     pub held: bool,
-    pub hold_fallback: Option<String>,
     /// The certificate's coming lapse (a badge): "this device's certificate lapses on <date>;
     /// pair it again before then".
     pub cert_notice: Option<String>,

@@ -52,7 +52,7 @@ import dev.rootshell.kai.ui.voice.VoicePane
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun MainScreen(app: KaiApplication, onOpenSettings: () -> Unit, onPair: () -> Unit) {
+fun MainScreen(app: KaiApplication, onOpenSettings: () -> Unit, onPair: () -> Unit, onOpenThreads: () -> Unit, onOpenThread: (Long) -> Unit) {
     val hub = app.hub
     val core = app.core
     val layout = currentLayout()
@@ -103,13 +103,14 @@ fun MainScreen(app: KaiApplication, onOpenSettings: () -> Unit, onPair: () -> Un
                     modifier = Modifier.fillMaxSize(),
                     onOpenConversation = { sheetOpen = true },
                     onSetup = onOpenSettings,
+                    onOpenThread = onOpenThread,
                 )
                 Layout.Wide -> Row(Modifier.fillMaxSize()) {
-                    VoicePane(app, connection, onAction, Modifier.weight(1f).fillMaxHeight(), onOpenConversation = null, onSetup = onOpenSettings)
+                    VoicePane(app, connection, onAction, Modifier.weight(1f).fillMaxHeight(), onOpenConversation = null, onSetup = onOpenSettings, onOpenThread = onOpenThread)
                     VerticalDivider()
                     // The conversation keeps a readable measure instead of running the full width.
                     Box(Modifier.weight(1f).fillMaxHeight(), contentAlignment = Alignment.TopCenter) {
-                        ConversationPane(app, Modifier.widthIn(max = 640.dp).fillMaxSize())
+                        ConversationPane(app, Modifier.widthIn(max = 640.dp).fillMaxSize(), onOpenThreads)
                     }
                 }
             }
@@ -120,7 +121,7 @@ fun MainScreen(app: KaiApplication, onOpenSettings: () -> Unit, onPair: () -> Un
             onDismissRequest = { sheetOpen = false },
             sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
         ) {
-            ConversationPane(app, Modifier.fillMaxWidth().fillMaxHeight(0.92f))
+            ConversationPane(app, Modifier.fillMaxWidth().fillMaxHeight(0.92f), onOpenThreads)
         }
     }
 }

@@ -22,7 +22,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -36,7 +35,6 @@ import androidx.compose.material3.ListItem
 import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
@@ -56,7 +54,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.core.net.toUri
 import androidx.lifecycle.compose.LifecycleResumeEffect
@@ -71,7 +68,10 @@ import dev.rootshell.kai.core.AndroidKeystore
 import dev.rootshell.kai.core.ffi.Colours
 import dev.rootshell.kai.core.ffi.CoreException
 import dev.rootshell.kai.ui.LabelledCheckbox
-import dev.rootshell.kai.ui.LabelledSwitch
+import dev.rootshell.kai.ui.SettingSwitch
+import dev.rootshell.kai.ui.SectionHeader
+import dev.rootshell.kai.ui.SettingNumber
+import dev.rootshell.kai.ui.SupportingText
 import dev.rootshell.kai.ui.Layout
 import dev.rootshell.kai.ui.ScreenInsets
 import dev.rootshell.kai.ui.SetupStep
@@ -83,6 +83,7 @@ import kotlinx.coroutines.withContext
 /** The settings pages (design §10.1). */
 enum class SettingsPage(val title: Int) {
     Gateway(R.string.settings_gateway),
+    Conversation(R.string.settings_conversation),
     Connection(R.string.settings_connection),
     Background(R.string.settings_background),
     Assistant(R.string.settings_assistant),
@@ -156,6 +157,7 @@ private fun SettingsDetail(page: SettingsPage?, app: KaiApplication, about: Abou
     val scroll = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(vertical = 8.dp)
     when (page) {
         SettingsPage.Gateway -> GatewayPage(app, onPair, scroll)
+        SettingsPage.Conversation -> ConversationPage(app, scroll)
         SettingsPage.Connection -> ConnectionPage(app, scroll)
         SettingsPage.Background -> BackgroundPage(scroll)
         SettingsPage.Assistant -> AssistantPage(scroll)
@@ -225,7 +227,11 @@ private fun GatewayPage(app: KaiApplication, onPair: () -> Unit, modifier: Modif
     }
 }
 
-/** The connection's settings (design §3.4): the waits, the stagger, the backoffs, the keep-alive. */
+/**
+ * The connection's advanced settings (design §3.4, presented 2026-10-19): the waits, the retries,
+ * the keep-alive and the pairing check, each with a human label, its unit as the suffix and a
+ * plain line. A refusal names the setting by its label.
+ */
 @Composable
 private fun ConnectionPage(app: KaiApplication, modifier: Modifier) {
     val scope = rememberCoroutineScope()
@@ -236,40 +242,43 @@ private fun ConnectionPage(app: KaiApplication, modifier: Modifier) {
     var retryBackground by remember { mutableStateOf(start.lmgw.retryMaxBackgroundS.toString()) }
     var keepalive by remember { mutableStateOf(start.feed.keepaliveS.toString()) }
     var poll by remember { mutableStateOf(start.pairing.confirmPollS.toString()) }
-    var folder by remember { mutableStateOf(start.conversation.folderName) }
     var said by remember { mutableStateOf<String?>(null) }
     Column(modifier.padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        Number("lmgw.timeout_s", R.string.setting_timeout, timeout) { timeout = it }
-        Number("lmgw.url_stagger_ms", R.string.setting_stagger, stagger) { stagger = it }
-        Number("lmgw.retry_max_s", R.string.setting_retry, retry) { retry = it }
-        Number("lmgw.retry_max_background_s", R.string.setting_retry_background, retryBackground) { retryBackground = it }
-        Number("feed.keepalive_s", R.string.setting_keepalive, keepalive) { keepalive = it }
-        Number("pairing.confirm_poll_s", R.string.setting_confirm_poll, poll) { poll = it }
-        OutlinedTextField(
-            value = folder,
-            onValueChange = { folder = it },
-            label = { Text("conversation.folder_name") },
-            supportingText = { Text(stringResource(R.string.setting_folder)) },
-            modifier = Modifier.fillMaxWidth(),
-        )
-        Text(stringResource(R.string.setting_doze_note), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        SupportingText(stringResource(R.string.set_connection_intro))
+        SectionHeader(stringResource(R.string.set_section_waiting))
+        SettingNumber(R.string.set_timeout, R.string.set_timeout_help, R.string.unit_s, timeout) { timeout = it }
+        SettingNumber(R.string.set_stagger, R.string.set_stagger_help, R.string.unit_ms, stagger) { stagger = it }
+        SectionHeader(stringResource(R.string.set_section_reconnecting))
+        SettingNumber(R.string.set_retry, R.string.set_retry_help, R.string.unit_s, retry) { retry = it }
+        SettingNumber(R.string.set_retry_background, R.string.set_retry_background_help, R.string.unit_s, retryBackground) { retryBackground = it }
+        SettingNumber(R.string.set_keepalive, R.string.set_keepalive_help, R.string.unit_s, keepalive) { keepalive = it }
+        SectionHeader(stringResource(R.string.set_section_pairing))
+        SettingNumber(R.string.set_confirm_poll, R.string.set_confirm_poll_help, R.string.unit_s, poll) { poll = it }
+        SupportingText(stringResource(R.string.setting_doze_note))
         Button(onClick = {
+            val fields = listOf(
+                SettingKey.TIMEOUT to timeout, SettingKey.STAGGER to stagger, SettingKey.RETRY to retry,
+                SettingKey.RETRY_BACKGROUND to retryBackground, SettingKey.KEEPALIVE to keepalive,
+                SettingKey.CONFIRM_POLL to poll,
+            )
+            val bad = fields.firstOrNull { !WholeNumber.valid(it.second) }
+            if (bad != null) {
+                said = app.getString(R.string.set_needs_number, app.getString(bad.first.label))
+                return@Button
+            }
             scope.launch {
                 said = try {
                     val s = app.core.settings()
-                    s.lmgw.timeoutS = timeout.trim().toUInt()
-                    s.lmgw.urlStaggerMs = stagger.trim().toUInt()
-                    s.lmgw.retryMaxS = retry.trim().toUInt()
-                    s.lmgw.retryMaxBackgroundS = retryBackground.trim().toUInt()
-                    s.feed.keepaliveS = keepalive.trim().toUInt()
-                    s.pairing.confirmPollS = poll.trim().toUInt()
-                    s.conversation.folderName = folder
+                    s.lmgw.timeoutS = WholeNumber.parse(timeout)
+                    s.lmgw.urlStaggerMs = WholeNumber.parse(stagger)
+                    s.lmgw.retryMaxS = WholeNumber.parse(retry)
+                    s.lmgw.retryMaxBackgroundS = WholeNumber.parse(retryBackground)
+                    s.feed.keepaliveS = WholeNumber.parse(keepalive)
+                    s.pairing.confirmPollS = WholeNumber.parse(poll)
                     app.core.setSettings(s)
                     app.getString(R.string.saved)
-                } catch (e: NumberFormatException) {
-                    app.getString(R.string.setting_not_a_number)
                 } catch (e: CoreException) {
-                    e.message
+                    refusalWords(app, e)
                 }
             }
         }) { Text(stringResource(R.string.save)) }
@@ -277,18 +286,14 @@ private fun ConnectionPage(app: KaiApplication, modifier: Modifier) {
     }
 }
 
-@Composable
-private fun Number(key: String, help: Int, value: String, onChange: (String) -> Unit) {
-    OutlinedTextField(
-        value = value,
-        onValueChange = onChange,
-        label = { Text(key) },
-        supportingText = { Text(stringResource(help)) },
-        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-        singleLine = true,
-        modifier = Modifier.fillMaxWidth(),
-    )
-}
+/** A settings refusal in plain words: the setting's label, never its key. */
+fun refusalWords(app: KaiApplication, e: CoreException): String =
+    if (e is CoreException.InvalidSetting) {
+        val w = Refusals.of(e.key)
+        app.getString(w.text, *w.labels.map { app.getString(it) }.toTypedArray())
+    } else {
+        e.message ?: app.getString(R.string.set_refused_unknown)
+    }
 
 /** Setup's "Kai in the background" card (design §9.5), re-checked on resume. */
 @Composable
@@ -378,7 +383,7 @@ private fun AppearancePage(app: KaiApplication, modifier: Modifier) {
     val context = LocalContext.current
     var system by remember { mutableStateOf(app.core.settings().appearance.colours == Colours.SYSTEM) }
     Column(modifier.padding(16.dp)) {
-        LabelledSwitch(stringResource(R.string.appearance_system), system) { on ->
+        SettingSwitch(stringResource(R.string.appearance_system), stringResource(R.string.appearance_system_help), system) { on ->
             system = on
             scope.launch {
                 val s = app.core.settings()

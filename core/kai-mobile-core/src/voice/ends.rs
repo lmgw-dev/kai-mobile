@@ -18,6 +18,7 @@ fn end(reason: EndReason, words: Option<String>, actions: Vec<VoiceAction>) -> C
         by: None,
         actions,
         restart: None,
+        thread: None,
     }
 }
 
@@ -42,7 +43,7 @@ pub fn idle(idle_end_s: u32) -> CallEnd {
     end(
         EndReason::Idle,
         Some(format!(
-            "voice ended after {idle_end_s} s of quiet (voice.idle_end_s)"
+            "voice ended after {idle_end_s} s of quiet (Settings → Voice → End a quiet call after)"
         )),
         Vec::new(),
     )
@@ -69,7 +70,7 @@ pub fn connection_lost(state: &str) -> CallEnd {
 pub fn connect_timeout(connect_timeout_s: u32, cue: bool) -> CallEnd {
     let mut words = format!(
         "lmgw did not start the voice session within {connect_timeout_s} s \
-         (voice.connect_timeout_s)"
+         (Settings → Voice → Time to start a call)"
     );
     if cue {
         words.push_str("; nothing said since the listening cue was answered");
@@ -185,5 +186,20 @@ pub fn closed(c: &CallClose, kind: &str, refusal: Option<&str>) -> CallEnd {
         by,
         actions,
         restart: None,
+        thread: None,
+    }
+}
+
+/// A thread's call ended as `out_of_reach` (§7.12): the thread itself is gone, so no Reconnect,
+/// which would bind it again.
+pub fn thread_gone(end: CallEnd) -> CallEnd {
+    CallEnd {
+        words: Some(
+            "This thread is gone: it was deleted, or is no longer within this device's reach on \
+             lmgw"
+                .to_owned(),
+        ),
+        actions: Vec::new(),
+        ..end
     }
 }

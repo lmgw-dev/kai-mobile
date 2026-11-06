@@ -231,7 +231,7 @@ pub fn of_failures(failures: &[(String, Failure)], timeout_s: u64) -> (Said, boo
                 S::NotAnswering,
                 format!(
                     "The computer with lmgw does not answer at {} (asleep, off, or out of reach of \
-                     its network, e.g. away without the VPN). Gave up after {timeout_s} s (lmgw.timeout_s).",
+                     its network, e.g. away without the VPN). Gave up after {timeout_s} s (Settings → Advanced connection → Wait for lmgw).",
                     hosts.join(" or ")
                 ),
                 vec![A::TryAgain, A::OpenWireGuard],
@@ -278,7 +278,10 @@ mod tests {
             10,
         );
         assert_eq!(s.state, S::NotAnswering);
-        assert!(s.words.contains("10 s (lmgw.timeout_s)"));
+        assert!(
+            s.words
+                .contains("10 s (Settings → Advanced connection → Wait for lmgw)")
+        );
         assert_eq!(s.detail.len(), 2);
         let (s, _) = of_failures(
             &[

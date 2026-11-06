@@ -59,6 +59,13 @@ the audits' fixes (predictive back, insets, TalkBack, font scale, size classes, 
 with JVM tests for the card's and the layouts' pure decisions and the frame tally. Not run on a
 phone: the acceptance checks are items 27 to 40 below.
 
+*Changed 2026-10-19 (the threads browser, §6.4):* built against lmgw 486e3773 (the browser's requests
+c2f90562 and the rename route; the pin is bumped at landing): the core's `threads/` (the browser's
+lists, the search's pages, the opened thread as a second `Convo`, the actions), its wiring in the
+link's actor and its exports, host tests (`threads/tests.rs`, `tests/it/threads.rs`); the app's
+Threads destination (`ui/threads/`), the conversation's parts shared with it, and JVM tests for its
+rules (`ThreadRulesTest`). Not run on a phone: the acceptance checks are items 41 to 48 below.
+
 **Acceptance of WP3 part 1 on the foldable test device** (`just install` of the debug APK; a dev lmgw
 with the Kai folder ongoing and a voice-capable model; each item names §17's "done when"):
 1. *Round trips through the LAN URL and the tunnel URL in both modes:* Talk on the voice screen, allow
@@ -90,7 +97,8 @@ with the Kai folder ongoing and a voice-capable model; each item names §17's "d
    only): item 12.
 9. *A dev hold shows the badge and the fallback's name:* switch the GPU hold on in the dev lmgw; the
    voice screen shows the hold, a held stage, and "answered by <alias> (fallback)" where a fallback
-   answered, or the turn's error with its code where none is set.
+   answered (with "<stage> <alias>: <fallback> answers in its place" once lmgw says so, §7.10), or
+   the turn's error with its code where none is set.
 10. *A dev lmgw stopped mid-call says so:* stop the dev lmgw during a call: "lmgw is shutting down, or
     its device access changed" with Reconnect; Reconnect once it is back connects.
 11. *The lock screen shows no content under Android's default settings* (§12.3, the owner's decision;
@@ -292,6 +300,61 @@ Each item names §17's "done when" (or the §10 row it closes). `adb logcat -s k
 40. *A second device* (§17), once P12's release exists: on a LineageOS device against a separate
     lmgw, items 27 to 29, 34 and 35.
 
+**Acceptance of the threads browser on the foldable test device** (§6.4; *added 2026-10-19*; a dev lmgw
+at 486e3773 or later with a few folders, one without a model, pinned and archived threads):
+41. *The list:* folded, the conversation's top bar → Threads: the folders in the dashboard's order,
+    each with its pinned threads first, the Kai conversation's thread marked, the threads in no
+    folder last, Archived (N) opening the archived ones. Pin a thread on the dashboard: the phone's
+    list moves it within a moment, without a pull.
+42. *Opening and reading:* open a thread of another folder; its messages render as the Kai
+    conversation's do (Markdown, the fallback's mark). Write in it on the dashboard: the reply
+    appears on the phone. Back returns to the list, back again to the main screen with the
+    conversation's sheet as it was. Open the Kai conversation's thread: it returns to the Kai
+    conversation instead.
+43. *Replying by text:* send in the opened thread; the reply streams in, a label notice shows as in
+    the Kai conversation, and a refusal (e.g. the GPU hold on a local model without a fallback)
+    shows with its code.
+44. *Voice stays with Kai:* start a call on the voice screen, open another thread: "Voice is with
+    the Kai conversation" with Back to Kai and Talk here; send text in that thread: the call's turn
+    goes on (at the key's concurrency limit the send says a call holds a slot). *(Changed
+    2026-10-19: Talk here is §7.12's, items 49 to 54.)*
+45. *The actions:* from a row's menu (its button and a long press) and the opened thread's top bar:
+    pin and unpin, archive and restore, move to another folder and to No folder, rename, delete
+    (the dialog asks first); the dashboard shows each. A temporary thread shows no menu.
+46. *New thread:* in a folder with a model, New thread opens an empty thread whose first send uses
+    the folder's model; in the folder without one, New thread shows the dashboard's steps; in the
+    Kai folder it is New conversation and returns to the Kai conversation.
+47. *Search:* type one character: the hint; two: results with the matches in bold; switch Active,
+    Archived, All and a folder; More results pages on; a message hit opens its thread at that
+    message.
+48. *Both screens:* unfolded, list and thread side by side; fold and unfold with a thread open: the
+    same thread stays open (on the cover screen as the browser's second page) with its unsent
+    draft, and nothing reconnects; leaving the browser and coming back starts from the list.
+
+**Acceptance of voice in other threads on the foldable test device** (§7.12; *added 2026-10-19*; a dev
+lmgw at 486e3773 or later with a second folder whose model has ASR and TTS behind it):
+49. *Talk in a thread:* open a thread of the other folder, Talk: the call connects, the voice screen
+    and the overlay's sheet say "In the thread '<title>'", the ongoing notification says "Thread:
+    <title>" unlocked and only "Kai · voice call" locked. Speak: the turn and the reply appear in
+    that thread's opened view, not in the Kai conversation; the thread's own voice and turn mode
+    (as set on the dashboard) are the ones used.
+50. *Back to it:* during that call open another thread: it says "Voice is with '<title>'" with Back
+    to it and Talk here; the voice screen's Open thread and the overlay's Keyboard return to the
+    bound thread.
+51. *One call at a time:* during a Kai call, open another thread, Talk here: "Voice moves here once
+    Kai is quiet"; while Kai still speaks nothing changes, then the Kai call ends without its ending
+    earcon and the thread's call starts. Stay on the voice screen (or Stay here in the bound
+    thread's view) calls the move off. End during the wait ends the call, and nothing else starts.
+52. *Kai's entry points stay Kai's:* with no call running, the side button, the tile and the voice
+    screen's Talk all bind the Kai conversation, also right after a thread's call ended; during a
+    thread's call they show the running call.
+53. *Refusals and ends:* Talk in a thread whose folder has no voice setup on lmgw: lmgw's words with
+    their code; the dashboard holding that thread's voice: "Voice is on the dashboard" with Take
+    over; delete the thread on the dashboard during its call: "This thread is gone" with no
+    Reconnect. A temporary thread shows no Talk.
+54. *Sending in the bound thread:* the input says "Sending text stops Kai's current answer"; a send
+    while Kai speaks stops the spoken answer, as in the Kai conversation.
+
 **Running WP0 (a) on the spike** (`spikes/wp0/RESULTS.md`, its (a) section; the spike is a separate
 app with its own assistant role, so Kai's role goes back to Kai afterwards):
 1. `just spike-apk` and `just spike-install`, then open "Kai WP0 spike" → (a).
@@ -379,7 +442,16 @@ The owner's standing rules, binding on this design:
     still applies (kai ruling 8) to what a stock OpenAI client sees (ruling 5).
 12. **Clients talk to lmgw only through its network API** (kai ruling 1, api ruling 1).
 13. **A GPU-hold 503 (`code: gpu_hold`) is no outage.** Local models are paused on purpose; cloud
-    aliases still answer. Kai mobile never retries it and never treats lmgw as down for it.
+    aliases still answer. Kai mobile never retries it and never treats lmgw as down for it. A
+    503 `gpu_deferred` is the other case: a background candidate alias deferred because the GPU is
+    busy with the owner's other work, so a retry later may work. Kai mobile never sends the
+    background header; the alias it uses can still defer. The hold's turn error shows lmgw's words
+    and code; the deferral is said in the app's own words ("The GPU is busy with other work right
+    now, so this could not be answered. Try again shortly.", then lmgw's message in brackets), the
+    one code-to-words mapping in `conversation/notice.rs`; no automatic retry yet. The upstream
+    quota and rate codes (`insufficient_quota`, `rate_limit_exceeded`, `resource_unavailable`, lmgw
+    83e8837e) can reach a turn's error too, but lmgw's message for them already says what happened
+    and what helps, so they show verbatim with their code.
 14. **lmgw may simply not be running.** It may not be running. "lmgw is not running" is a normal
     state, shown plainly, never an error dialog.
 
@@ -737,8 +809,8 @@ binds its current thread (P8). Whether the phone should also capture before the 
 exists and send it as `lmgw.input_audio.preroll` is Q5, decided after WP0 on its merits.
 
 **M22. The first usable version is the Kai conversation, voice, assistant mode and push.** Deferred
-until the app has proven usable: the message cache (M10), the threads browser and search, Markdown
-tables, the Baseline Profile module, publishing for Obtainium (Q10), the lock screen (Q7), silent
+until the app has proven usable: the message cache (M10), the threads browser and search (built
+2026-10-19 on the owner's decision of that day, §6.4), Markdown tables, the Baseline Profile module, publishing for Obtainium (Q10), the lock screen (Q7), silent
 certificate renewal (lmgw's device link WP8), and the tabletop posture (M23). Each is in Later with
 the reason it waits.
 
@@ -866,7 +938,20 @@ bound to a Chat thread or folder (ruling 5), and calls C24 lists it in one table
 - **The pairing link v2** `lmgw-pair:?v=2&name=…&url=…[&url=…]&fp=sha256:…&token=lmgw-enrol-…`:
   `url` repeats, `https` only, in the owner's order; the token is single-use and lives
   `devices.token_minutes` (10) (D6, D8).
-- **`POST /devices/enrol`** `{token, public_key, client}`, without a client certificate, answers 201
+- **The app id** (lmgw c698bd9e): a device may declare its own at enrolment, a lowercase reverse-DNS
+  name (lmgw refuses a malformed one 400 `bad_request`); the Devices card shows it and only a
+  device with one can receive a device-to-device transfer offer. Kai mobile sends the Android
+  application id (`context.packageName` through `PlatformFacts.app_id`: `dev.rootshell.kai`, a debug
+  build's `dev.rootshell.kai.dev`), so Gradle stays the one source. It reaches lmgw at the next
+  pairing; a phone paired before keeps none until it is paired again. The app does not offer or
+  receive transfers yet.
+- **The device's own name** (lmgw 00aa25e0): the enrolment may carry `device_name`, the name the
+  user gave the phone; lmgw's Devices card shows it beside the client text as the device's claim,
+  trusted for nothing. Kai mobile sends Android's `Settings.Global.DEVICE_NAME` (Settings → About phone →
+  Device name), else `Build.MODEL`, blank as none, through `PlatformFacts.device_name`; the core hands
+  lmgw-client's `DeviceSelf { name, client, app_id }` to `requests::enrol`. It reaches lmgw at the
+  next pairing; a phone paired before shows no name until it is paired again.
+- **`POST /devices/enrol`** `{token, public_key, device_name?, client, app_id?}`, without a client certificate, answers 201
   `{device, certificate, ca_certificate, not_after, notice_after, urls, confirm_code, confirmed}`
   with `Connection: close`. The same key presenting a used token again gets the same answer. Its
   refusals: 400 `bad_request`, 400 `public_key_unsupported`, 401 `pairing_token_unknown`, 401
@@ -1070,6 +1155,8 @@ core/kai-mobile-core/src/
 │                   race (M5), the feed task with its cursor, backoff, wake-ups, reachability
 ├── signer.rs       rustls's SigningKey over the Keystore callback (M7)
 ├── conversation/   the folder (P5's rule), current, the Kai thread's messages, the send stream
+├── threads/        the browser's lists, the search's pages, the opened thread, the thread actions
+│                   (§6.4, added 2026-10-19)
 ├── voice/          the call's signalling, the events channel, Machine, captions, mic decisions,
 │                   the pending bind, the stop and playout reports, end reasons from the call
 ├── approvals/      the open set from the feed and pending calls from the call, decisions
@@ -1175,7 +1262,8 @@ the core no longer needs. `Pairing` is what the confirmation screen shows: the d
 lmgw gave it, the code, and the URLs.
 
 *Changed 2026-10-15 (WP2, as built):* `Core::new(dirs, facts, keystore)`, where `PlatformFacts` carries
-the OS for the enrolment's `client` text, the app's version, and the system's active approval and
+the OS for the enrolment's `client` text, the app's version, the app id and the phone's own name
+(`app_id`, `device_name`, both sent at enrolment), and the system's active approval and
 reply notifications at start (`notified_approvals`, `notified_replies`): the first feed's reader must
 know them (§5.4), and an entry point called after the constructor would race the first connect. `pair`
 takes the link's text, not a preview record (the token crosses only inside the text);
@@ -1260,6 +1348,28 @@ Kept in the core's JSON file, edited through `set_settings`, all shown on the se
 `half_duplex` (§8.2); `voice.echo_tail_ms` is sent with half duplex only, and unset leaves lmgw's own
 value (the part names none). The voice settings page shows both; a change applies from the next
 call.
+
+*Presentation, 2026-10-19 (the owner's ruling: no setting is shown as a raw field labelled with its config key):*
+the keys in the table are the file's format and never the owner's words.
+Every setting on the settings pages has a short human label in sentence case, a plain supporting line, its
+unit as the field's suffix (s, ms) and the control that fits it: a numeric field, a switch for a
+boolean, a choice of rows (each with a human name and a line, never the raw word) for an enum. Everyday
+choices come first, in sections with headers; the waits, the stagger, the retries, the keep-alive, the
+playout report and the two tails are advanced: the whole Advanced connection page, and a collapsed
+Advanced group at the foot of Voice. A value the core refuses is said with the setting's label
+(`ui/screens/SettingsModel.kt` maps every key the core can name; a JVM test fails when a screen or a string
+spells a key), and the core's own texts that used to name a key (a wait that ran out, a call that ended
+quiet) name the page and the label instead.
+
+*Conversation, 2026-10-19:* `conversation.folder_name` is presented as a choice on its own settings page
+(first after Gateway): "Shared with your other Kai apps" (the name "Kai", the desktop's default, so the
+phone and the desktop continue one conversation) or "Only on this phone" (a name field, "Conversation
+name", starting with "Kai" and the phone's own name from Settings, else its model, so two phones never land in one conversation; "Kai" alone is refused there, as it is the shared option, and choosing the option changes nothing until Save). A stored name other
+than exactly "Kai" opens as the second option with that name. Saving needs no restart: the core's
+`settings_changed` sees the new name, forgets the remembered folder, clears the conversation from the
+screen and looks the folder up again by §6.1's rule (a new plain folder when none is named so); a new
+folder has no model yet, and the conversation screen shows the dashboard steps (`folder_no_model`). A
+call in progress keeps the folder it started with.
 
 ### 3.5 Logging
 
@@ -1697,6 +1807,115 @@ without the token.
   Notices are shown in the conversation only: never in a notification, so never on the lock
   screen.
 - Attachments are Later.
+
+### 6.4 The threads browser
+
+*Added 2026-10-19, the owner's decisions of that day; it was Later (M22).* Any thread the device can
+see can be opened, read (kept current by the feed like the Kai thread) and answered by text, with
+§6.3's send, stream and notices. The browser lists the threads grouped by folder with the pinned
+first, an archived section, and lmgw's full-text search. Its actions: New thread in a folder,
+pin and unpin, archive and restore, move to another folder, delete (with a confirmation) and rename
+(lmgw's `POST /chat/api/threads/{id}/title`, added for it the same day, lmgw 486e3773). The phone still writes no thread settings (model, prompt,
+sampling): the model is the owner's choice. Voice stays with the Kai conversation; voice in other
+threads is Later. *(Changed 2026-10-19, the owner's decision of the same day: voice in other threads
+is built, §7.12; Talk in an opened thread binds the call to that thread.)*
+
+What lmgw lets a device do here (verified in lmgw-core, 2026-10-19): every route is `Cap::Chat`. The
+lists, `archived_count`, the folders' counts and the search leave out what the device may not see
+(`admin` threads always, a thread with lmgw's self-admin toolset unless the device's admin-tools
+level reads it), and a thread in a folder hidden from the device has `folder_id: null`. A create of
+`kind: admin` is 403, its alias must be in the device's scope, a hidden folder is 404; pin, archive,
+move, rename and delete work within the device's reach (404 outside it), a temporary thread
+(negative id) is `409 temporary_thread`, a move's target folder must be one the device sees, and a
+title empty once trimmed is `400 bad_request`. Every refusal is
+shown verbatim with its code, as the conversation shows one.
+
+Taken here:
+- **One thread opened at a time, beside the Kai conversation, never instead of it.** The core keeps
+  the Kai conversation (§6.1 to §6.3) as it was and adds one opened thread (`threads::Opened`),
+  which wraps a second `Convo` without a folder, so the messages, the send's stream, the label
+  notices, who else answers and who holds voice follow the very rules of the Kai thread. The actor
+  hands every feed event to both. *Why:* the Kai conversation's folder rule, its rollover, its
+  notifications and the call's binding stay untouched, and an opened thread needs nothing they do.
+- **The Kai thread opens as the Kai conversation.** The browser marks it ("Kai conversation") and
+  opening it returns to the main screen with the conversation showing (the sheet on a compact
+  window); it is never a second copy with state of its own. Older threads of the Kai folder (the
+  rolled-over conversations) open like any other. *Changed 2026-10-19, review:* the core enforces
+  it, not only the list's marks: an opening whose id is the conversation's thread (or becomes it
+  when the conversation's `current` answers later) is marked `kai` in `OpenedView`, reads nothing
+  and takes no send, and the app leaves for the conversation on seeing the mark.
+- **A send's frames name the opened thread they belong to** (the opened instance's number). A
+  stream of a thread the owner left is still read to its end (a request that stopped reading would
+  stop the turn), its frames are dropped, and its saved reply arrives with the thread's next read or
+  the feed's `message.added`.
+- **Cached and re-read.** Nothing is persisted (the message cache, M10, is still Later). The
+  browser's lists are read when it shows and dropped when it closes. While it shows they are read
+  again after every `thread.*`, `folder.*`, `message.added` (a thread's activity moves its place),
+  `resync` or event that does not read, after each `hello`, when the app becomes visible and after
+  each action, one read in flight and one more after it when something came meanwhile. *Changed 2026-10-19,
+  review:* the lists are read only while the app is visible (the back stack shows the browser also
+  while the app is in the background; a wanted read waits and the app becoming visible reads it);
+  a key refusal of a read ends it, so the next trigger reads again; the opened thread's reads are
+  coalesced the same way, and a feed delta applied during a read owes another, so an older snapshot
+  never replaces a newer message; the phone's own archive or restore of the opened thread reads it
+  again like the feed's. The order is
+  lmgw's (pinned first, then the most recently active), never re-sorted on the phone, so one rule
+  orders the dashboard's list and the phone's. The archived list is read only while its section is
+  open. The opened thread is read whole when it opens, at each `hello`, `resync` or unreadable
+  event, when the app becomes visible, and on its `thread.deleted` or an archive (which lmgw may
+  answer 404: then it shows as gone, with why); between reads `message.*`, `thread.updated` (title,
+  pin, archive, folder), `turn.*` and `voice.*` keep it current.
+- **Search is a request, not state:** `search(q, scope, folder, offset)` answers one page; under two
+  characters the core refuses without a request (lmgw's own minimum). The snippets' match marks
+  (U+E000, U+E001) are split by the core into parts with a `hit` flag, so Kotlin bolds them and
+  nothing in a snippet is ever read as markup. Scope Active, Archived or All (the phone's default
+  All: finding a thread is the point), an optional folder, More results by `next_offset`. A hit
+  opens its thread at the matching message.
+- **Actions** sit in each row's menu (its overflow button and a long press) and in the opened
+  thread's top bar. Delete asks first ("Delete '<title>' and its messages on lmgw? This cannot be
+  undone."), move picks from the folders the device sees plus "No folder", rename edits the title
+  in a dialog (sent as typed: lmgw trims it, and a title set by hand sticks past the first send's
+  naming). A temporary thread shows none of them (lmgw refuses each with 409). An action
+  answers once lmgw did; a refusal is shown with its code. An action on the Kai thread is allowed:
+  lmgw's `folder.current` moves the Kai conversation as it would for the desktop's.
+- **New thread** is offered in a folder whose defaults name a model:
+  `create_thread(<the folder's model>, Some(folder))`, read fresh from the folder list at the tap,
+  then the app opens it (selecting it opens it in the core once; the create itself opens nothing). A folder without a model shows the dashboard's steps instead ("On
+  lmgw: Chat, the folder's menu → Folder settings, pick its Model"), as §6.1 does for
+  `folder_no_model`. In the Kai folder New thread is New conversation (§6.1), which lmgw's create
+  would roll the ongoing folder to anyway, and it returns to the Kai conversation. Outside any
+  folder there is no New thread: it would need a model, and the phone has no model picker.
+- **Voice in another thread:** ~~the opened thread has no Talk control~~. *Changed 2026-10-19
+  (§7.12):* the opened thread has Talk, which binds the call to it; the voice screen, the overlay,
+  the tile and the headset keep talking to the Kai conversation. While the phone's call runs bound
+  elsewhere, the opened thread says which conversation holds voice ("Voice is with the Kai
+  conversation", or "Voice is with '<title>'") with a way back to it and Talk here. A send in a
+  thread the call is not bound to does not cut the call's turn (another thread), but takes one of
+  the key's concurrency slots (§6.3's `key_rate` hint applies); a send in the bound thread cancels
+  the voice turn, as in the Kai conversation, and the input says so.
+- **Notifications** keep §12.3's scope (the Kai folder's threads). Opening a thread while the app is
+  visible withdraws its reply notification (an older Kai-folder thread may have one), as opening
+  the Kai thread does. Approval cards show at their messages in the opened thread too.
+- **Screens** (§10.1, §10.6): the conversation's top bar has Threads, one Navigation Compose
+  destination (predictive back to the main screen). On a compact window (the cover screen) its list
+  and the opened thread are two pages of it, as settings' list and page are: back from the thread
+  returns to the list (`BackHandler`, no preview, as settings' compact page), back from the list
+  leaves. On a wide window (600 dp and wider, the inner screen) list and detail sit side by side,
+  the opened thread at the conversation's 640 dp. The opened thread is the hub's and the core's, not
+  the destination's, so a fold or an unfold keeps it on either screen; leaving the browser closes it
+  and drops the lists. *Changed 2026-10-19, review:* what the owner typed is the hub's too, not the
+  composition's (the list and the thread are composed at other places after a fold, and the compact
+  window drops the list while a thread shows): the draft of each thread, the search (query, scope,
+  folder, results, the More page, which a new query cancels) and whether Archived is open. They last
+  for the process (not past its death); leaving the browser clears the search and the section.
+- **What crosses the boundary** (§3.2): `browser(showing)`, `browser_archived(showing)`,
+  `search(query, scope, folder_id, offset) -> SearchPageView`, `open_thread(id)`, `close_thread()`,
+  `send_in_thread(id, text)`, `new_thread(folder_id) -> id`, `pin_thread(id, pinned)`,
+  `archive_thread(id, archived)`, `move_thread(id, folder_id)`, `rename_thread(id, title)`,
+  `delete_thread(id)`; updates
+  `Browser { view }` (the sections, the archived count and list, whole), `Opened { view }` (the
+  opened thread's facts, `None` once closed) and `OpenedMessages { delta }` (its messages, as
+  `Messages` carries the Kai thread's).
 
 ## 7. Voice
 
@@ -2272,6 +2491,14 @@ indicator out) is WP0 (j)'s, and an acceptance check covers it.
 `VoiceView::error`; repeats of a code are counted in the log. A held stage (`lmgw.model.state {state:
 held}`) shows as "Paused: <stage> <alias> (<cause>)", the hold as the connection's badge, and a
 fallback that answered as the caption's "answered by <alias> (fallback)".
+*Changed 2026-10-25 (lmgw d01c3db8, one fallback per model):* lmgw no longer has a global hold
+fallback (the feed's `hold` is `{active}` only): each model and alias has its one `fallback`, used
+for every reason (the hold, the GPU full, background, a quota, unreachable, disabled). So the hold's
+badge is "Local models are paused (GPU hold)" alone, on the connection and on the voice screen, and
+names no alias. A call's stage that lmgw says a fallback answers for (`lmgw.model.state {state:
+fallback, answered_by}`) shows as its own line, "<stage> <alias>: <fallback> answers in its place"
+(`VoiceView::fallback_stages`), until that stage says another state; the caption's "answered by
+<alias> (fallback)" per reply stays.
 
 ### 7.11 Network changes
 
@@ -2294,6 +2521,118 @@ call survives a network change only if a new local candidate still reaches it:
 (`GATHER_CONTINUALLY`), so a new network adds candidates to the running call; a connection that
 pauses (`disconnected`) is a note on the voice screen, not an end; one that fails ends as "connection
 lost (failed)" with Reconnect, which POSTs to whichever URL the link's race found since.
+
+### 7.12 Voice in other threads
+
+*Added 2026-10-19, the owner's decision of that day; it was Later.*
+Talk in an opened thread (§6.4) binds the call to that thread. Everything else of this section stays
+the Kai conversation's.
+
+The rules (the owner's decision, 2026-10-19):
+1. **Talk in an opened thread binds the call to that thread:** the POST names it,
+   `/v1/realtime/calls?chat_thread=<id>&takeover=ask` (lmgw-client's `CallBind::Thread`, already
+   there; no folder lookup, no `new`). The call has the Kai call's states, captions, approvals,
+   takeover, hold and ends (§7.1 to §7.11); lmgw resolves the thread's own model, voices and turn
+   detection (`session.lmgw.turn_mode`), as for the folder's thread. lmgw's refusals (404
+   `chat_thread_not_found`, the bind's 403 and 409s, a voice stage the key may not use, a refusal at
+   the open) are shown verbatim with their code, as §7.3's are; a thread another client holds is
+   the pending bind of §7.9.
+2. **Kai's entry points stay the Kai conversation:** the assistant gesture and its overlay, the
+   Quick Settings tile, the launcher shortcut, the headset buttons and the voice screen's own Talk
+   bind by the Kai folder as before (`CallStart.thread` is `None`). Only an explicit Talk inside an
+   opened thread binds elsewhere. A Talk on the Kai conversation's own thread (it became the
+   current one after the opening) binds by the folder too: the core makes the choice
+   (`voice::bind::choose`), so the folder's rollover and §7.7's rebind keep applying to it.
+3. **One call at a time: the running call moves at its next quiet point.** Talk in thread B while a
+   call runs bound elsewhere ends that call at its next quiet point (no open response, nothing
+   playing, no press, no stop in flight; a pending bind at once) and starts B's: §7.7's rebind,
+   whose `CallEnd::restart` names B. Until then the call's views say "Voice moves here once Kai is
+   quiet" in B and "Voice moves to another conversation once Kai is quiet" on the call's screens,
+   with Stay, which calls the move off; a Talk in a third thread replaces the target; End ends the
+   call, and nothing starts. *Why this and not a confirm:* the owner's tap is the decision
+   already, and a dialog would only ask it twice; ending at once would cut Kai mid-sentence and
+   keep only the heard part of the reply, while the quiet point lets the reply finish and be saved
+   whole; it is the mechanism New conversation uses (§6.1, §7.7), so the call's audio (focus,
+   route, MediaSession, microphone type) carries over without an ending earcon between the two
+   calls, the old call's id is hung up before the new POST, and the whole move is the core's,
+   sans-IO and tested. A move asked before the call is bound waits for the bind.
+4. **The bound thread is named.** `VoiceView` says how the call binds (`bind_thread`: `None` for
+   the Kai folder) and its thread's title (`thread_title`, from `session.lmgw.resolved.chat_thread`
+   and `lmgw.chat.thread`). The voice screen and the overlay's sheet say "In the thread '<title>'"
+   for such a call, and the voice screen has Open thread, back to it. Wherever an opened thread
+   said "Voice is with the Kai conversation" it now names the holder: the Kai conversation (Back to
+   Kai) or "'<title>'" (Back to it); the bound thread itself says "Voice call in this thread" with
+   Show call. **Notifications:** §12.3 lets an unlocked notification carry a thread's title (a
+   reply's notification is titled with it) and §8.6's call notification already names the Kai
+   thread unlocked, so the ongoing notification names the bound thread unlocked ("listening ·
+   Thread: <title> · …"); locked it stays "Kai · voice call" with no title or words, as every
+   locked face does. The ended call's notice keeps its words, which name no thread.
+5. **The call's messages are the thread's.** lmgw saves `lmgw.chat.user` and `lmgw.chat.reply` into
+   the bound thread and the feed's `message.added`/`message.updated` carry them, so they appear in
+   that thread's opened view (§6.4's feed rules) and in the Kai conversation only when the call is
+   bound to the Kai thread; the phone writes nothing of its own for them. A text send in the bound
+   thread cancels the voice turn (lmgw's rule, §6.3), and the input says "Sending text stops Kai's
+   current answer" while a call is bound to its thread, in the Kai conversation as in an opened
+   thread (§6.3 asked for the line; it had not been built).
+6. **Temporary threads have no Talk.** lmgw binds a negative `chat_thread` to its temporary thread,
+   which it keeps out of the history and the feed: the opened view would not follow the call's
+   messages, and §9.6 keeps the negative bind for the lock screen's own temporary thread (Q7,
+   Later). The core refuses such a start with words, before any request.
+
+Taken here:
+- **`CallStart.thread`** (`Option<i64>`, default `None`) is the binding; `Voice::switch_to(start)`
+  asks the running call to move (rule 3) and answers whether one runs (`false`: Kotlin starts the
+  call as Talk does). Reconnect and Take over of an ended call bind as it did (`CallEnd.thread`),
+  so a thread's lost call reconnects to the thread; the voice screen's Talk binds the Kai folder.
+- **K16 and the expected prompt** for a thread's call come from the feed's live facts for that
+  thread (the link's conversation keeps them for every thread): who else answers there, and who
+  holds its voice when the call starts. `folder.current` does not touch such a call: §7.7's rebind
+  follows the Kai conversation, and this call is not bound to it.
+- **Replies the owner hears:** §12.3 keeps a Kai-folder thread's reply from notifying while the
+  phone's call runs, since the owner hears it. During a thread's call that holds only for the bound
+  thread: the Kai conversation's replies (another client answering there) notify as without a call.
+  The Kai call's rule is unchanged.
+- **`out_of_reach`** on a thread's call reads "This thread is gone: it was deleted, or is no longer
+  within this device's reach on lmgw" with no Reconnect, since Reconnect would bind the same gone
+  thread (the Kai call's words name the conversation's thread and its Reconnect binds the folder's
+  current one).
+- **Not changed:** every Kai call's request, event, timer and end is as before (the Kai path's
+  tests assert what they did); approvals in a thread's call are §11's cards, shown where their
+  thread is.
+
+*Changed 2026-10-19, review:*
+- **The gap of a move.** Between the two calls (the old one `Ending` or `Ended` with
+  `CallEnd::restart` set, the next one not yet the core's) the call still runs for every view
+  (`moving()` in Kotlin): the restart's target reads "Voice call in this thread", no thread offers
+  Talk, and the overlay shows the call. `CallEngine.start` answers `Moving` then, the restart going
+  to that start instead while it has not left yet (the latest choice wins, as rule 3's third
+  thread does). A refused restart ends only its own call: its end goes through `CallOrder`, so a
+  call that won the race keeps its focus, route and MediaSession. The link refusing the restart
+  (§7.3 step 1) makes the ended call say so (a refused end with Reconnect to the restart's
+  binding) instead of leaving a restart in the view that never comes; this holds for the Kai
+  call's rebind too.
+- **Stay** is `Voice::stay(call)`: it names its call and asks nothing of the link, so neither a
+  lost network nor an owed Confirm refuses it, and one that comes after the move went is refused
+  with words (shown as the call's error) instead of moving the next call back. The thread a move
+  waits for being deleted or leaving the device's reach (the feed's `thread.deleted`, a gone
+  `thread.*`) calls the move off, with a caption note.
+- **K16** for a thread's call is kept from the call's start on (the link sends a thread's facts
+  only when they change, so a turn running before the bind is said once, before
+  `session.created`); the microphone and the view read it only while live. The Kai conversation's
+  thread change (a rollover, New conversation) drops only its own thread's live facts, as the
+  rule above already said.
+- **Replies collected over a catch-up or a resync** are quiet per thread at the flush (the app
+  visible, or the thread the owner hears in the call), as the live path is: the Kai
+  conversation's replies notify during a thread's call.
+- **A thread that is gone** offers no Talk, and 404 `chat_thread_not_found` on a thread's call ends
+  as `out_of_reach` does (no Reconnect), lmgw's refusal with its code as the end's message.
+- **Take over from a voice notice** binds the thread the notice's intent names (its id, never its
+  title), not the binding at tap time, and is a call of its own as before: refused while another
+  call runs, never a move of it.
+- **The Kai conversation's thread opened in the browser** reads "Voice call in this thread" during
+  the Kai call, and its input says that a send stops Kai's current answer.
+- The unlocked call notification leaves the thread out while lmgw has not named it (an empty
+  title) instead of "Thread: ".
 
 ## 8. Audio
 
@@ -2789,13 +3128,16 @@ content (realtime §19).
 - **Kai conversation:** the messages (§6.2), streaming replies, the text field with IME insets,
   New conversation, and banners: the folder's steps, "Voice is on <by>", the hold.
 - **Settings:** gateway (device name, the URLs and the one that last answered, lmgw's CA
-  fingerprint shortened, the certificate's dates and notice, pair again, forget), connection
+  fingerprint shortened, the certificate's dates and notice, pair again, forget), conversation
+  (shared or only on this phone, *2026-10-19*), advanced connection
   (timeouts, the URL stagger, the backoffs, the feed's keep-alive), notifications (a link to each
   channel's system settings), voice (§3.4's voice keys), setup (§9.5's two cards), appearance,
   About (app version, core version, lmgw pin, lmgw's epoch).
 - **Pairing and setup** (§4, §9.5).
 - On a foldable's inner screen the voice and conversation screens sit side by side (§10.6).
-- The threads browser and search are Later (M22): the first version is the Kai conversation.
+- **Threads** (from the conversation's top bar; *changed 2026-10-19*, it was Later, M22): the threads by folder, the pinned first, the archived section, the
+  search; an opened thread with its messages and the text field, without voice (§6.4). On a wide
+  window list and detail side by side.
 
 ### 10.2 Platform behaviour
 
@@ -3708,7 +4050,9 @@ Decided during the build, each on the measurement it names:
 After the first usable version (M22), each waiting for a reason:
 - **The local message cache** (rusqlite, an instant start without the re-read): decided on WP2's
   measured start time. The feed's cursor is persisted from the first version already (M10).
-- **The threads browser and search**, and voice in other threads: the Kai conversation comes first.
+- ~~**Voice in other threads**: the Kai conversation comes first.~~ *(Changed 2026-10-19: the threads
+  browser and search, which waited here with it, are built, §6.4; voice in other threads too, the
+  same day, §7.12.)*
 - **Markdown tables** rendered as tables: rare in spoken replies; source text until then.
 - **A Baseline Profile module** (Macrobenchmark): once there are screens worth profiling.
 - **Publishing for Obtainium** (Q10).

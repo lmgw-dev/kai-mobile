@@ -85,6 +85,10 @@ class OverlayModel {
                 blocked = Blocked.Words(result.words)
                 null
             }
+            // The overlay starts by `CallEngine.start`, which never moves a call (design §7.12); a
+            // start between a rebind's two calls joins the call that is coming, which is not the
+            // overlay's.
+            Started.Moving -> null
         }
     }
 

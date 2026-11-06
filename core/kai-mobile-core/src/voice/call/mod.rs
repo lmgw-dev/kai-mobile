@@ -27,7 +27,8 @@
 //! inside; the owner's controls in `owner`, the phone's audio focus and headset buttons in
 //! `device`, the assistant overlay's dismissal in `dismiss`, lmgw's events in `events`, approvals
 //! in the call in `approvals`, the late task result's continuation in `continuation`, the view in
-//! `render`, the captions in [`Captions`].
+//! `render`, the captions in [`Captions`], a thread's call and the move to another thread in
+//! `thread` (§7.12).
 
 mod approvals;
 mod captions;
@@ -39,6 +40,7 @@ mod owner;
 mod render;
 #[cfg(test)]
 mod tests;
+mod thread;
 
 use std::collections::{HashMap, HashSet};
 
@@ -195,10 +197,14 @@ pub struct Call {
     thread_at_bind: Option<i64>,
     conversation_thread: Option<i64>,
     rebind: bool,
+    /// Talk elsewhere during the call (§7.12, rule 3): the call ends at its next quiet point and
+    /// this call follows it.
+    switch: Option<CallStart>,
     tool: Option<String>,
     hold: bool,
-    hold_fallback: Option<String>,
     held_stage: Option<String>,
+    /// `lmgw.model.state {state: fallback}` by stage, in the order the stages first said it.
+    fallback_stages: Vec<(String, String)>,
     error: Option<String>,
     errors: HashMap<String, u32>,
     /// An `error` before the bind: a refusal at the open, which `lmgw.session.closed` follows.
@@ -234,7 +240,7 @@ impl Call {
         facts: Facts,
         expect: Option<String>,
         conversation: Option<(i64, String)>,
-        hold: (bool, Option<String>),
+        hold: bool,
         now: u64,
     ) -> Self {
         let override_mode = match facts.mode {
@@ -298,10 +304,11 @@ impl Call {
             thread: conversation,
             thread_at_bind: None,
             rebind: false,
+            switch: None,
             tool: None,
-            hold: hold.0,
-            hold_fallback: hold.1,
+            hold,
             held_stage: None,
+            fallback_stages: Vec::new(),
             error: None,
             errors: HashMap::new(),
             refusal: None,
@@ -476,6 +483,12 @@ impl Call {
 
     /// The conversation's thread and who else answers in it (K16), from the link.
     pub fn conversation(&mut self, thread: Option<i64>, answering: Vec<String>, now: u64) {
+        if self.by_thread() {
+            // A thread's call follows its own thread, not the Kai conversation (§7.12).
+            self.conversation_thread = thread;
+            self.settle(now);
+            return;
+        }
         self.conversation_thread = thread;
         let bound = self.thread.as_ref().map(|(id, _)| *id);
         self.others = if self.phase == CallPhase::Live && thread.is_some() && thread == bound {
@@ -502,9 +515,8 @@ impl Call {
     }
 
     /// The GPU hold (a badge).
-    pub fn hold(&mut self, held: bool, fallback: Option<String>) {
+    pub fn hold(&mut self, held: bool) {
         self.hold = held;
-        self.hold_fallback = fallback;
     }
 
     // ------------------------------------------------------------------ time
@@ -771,7 +783,13 @@ impl Call {
             return;
         }
         tracing::info!(call = self.n, reason = ?end.reason, words = ?end.words, "voice: the call ended");
+        // Reconnect and Take over bind as this call did (§7.12).
+        let end = CallEnd {
+            thread: self.start.thread,
+            ..end
+        };
         self.phase = CallPhase::Ended;
+        self.switch = None;
         self.end = Some(end.clone());
         self.connect_by = None;
         self.tail_until = None;
@@ -853,12 +871,15 @@ impl Call {
     fn settle(&mut self, now: u64) {
         if self.phase == CallPhase::Live {
             let quiet = self.machine.quiet() && !self.pressed && self.tail_until.is_none();
-            if self.rebind && quiet && self.stop_request.is_none() {
+            if (self.rebind || self.switch.is_some()) && quiet && self.stop_request.is_none() {
                 self.rebind = false;
                 self.stale = true;
-                self.hang_up(ends::rebind(CallStart::default()), now);
+                // A move to another thread restarts there; a rebind by the folder, as before.
+                let restart = self.switch.take().unwrap_or_default();
+                self.hang_up(ends::rebind(restart), now);
             }
         }
+        self.switch_if_pending(now);
         match self.phase {
             CallPhase::Live => {
                 // A call of the thread waiting for the owner's verdict is no quiet (§7.7).

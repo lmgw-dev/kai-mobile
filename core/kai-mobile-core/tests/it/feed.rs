@@ -73,7 +73,6 @@ async fn hello_refreshes_the_urls_and_the_certificate_s_dates() {
         .connection("connected", |v| v.state == ConnectionState::Connected)
         .await;
     assert!(v.held);
-    assert_eq!(v.hold_fallback.as_deref(), Some("cloud"));
     let g = v.gateway.unwrap();
     assert_eq!(
         g.urls,
@@ -478,7 +477,12 @@ async fn the_whole_race_is_bounded() {
         "{:?}",
         started.elapsed()
     );
-    assert!(v.words.contains("2 s (lmgw.timeout_s)"), "{}", v.words);
+    assert!(
+        v.words
+            .contains("2 s (Settings → Advanced connection → Wait for lmgw)"),
+        "{}",
+        v.words
+    );
     assert_eq!(v.detail.len(), 2);
 }
 

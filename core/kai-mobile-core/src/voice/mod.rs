@@ -5,6 +5,7 @@
 //! the core owns every rule.
 //!
 //! - [`call`]: one call's rules, sans-IO;
+//! - [`bind`]: what a call binds (the Kai folder, or a thread the owner opened, §7.12);
 //! - [`signal`]: the offer's POST, the stale call's hangup, the warm connection;
 //! - [`actor`]: the voice task, which owns the call and talks to the link's actor;
 //! - [`view`]: what Kotlin sees ([`VoiceView`], [`CaptionLine`], [`CallEnd`]).
@@ -17,6 +18,7 @@
 //! when the next call starts) never reaches the new call; the owner's controls through the rest.
 
 pub mod actor;
+pub mod bind;
 pub mod call;
 mod ends;
 mod playout;
@@ -42,6 +44,10 @@ pub struct CallStart {
     /// The owner already chose Take over (an ended call's words): `lmgw.session.take_over` goes as
     /// soon as `bind_pending` arrives.
     pub take_over: bool,
+    /// `chat_thread=<id>`: Talk in an opened thread binds the call to it (§7.12). `None`, every
+    /// other entry point's: the Kai folder's current thread, as `chat_folder` binds it.
+    #[uniffi(default)]
+    pub thread: Option<i64>,
 }
 
 /// The microphone (design §7.5, §7.9).
@@ -149,9 +155,9 @@ impl Voice {
         let _ = self.cmds.send(cmd);
     }
 
-    async fn ticket(&self) -> Result<actor::Ticket, CoreError> {
+    async fn ticket(&self, thread: Option<i64>) -> Result<actor::Ticket, CoreError> {
         let (reply, rx) = oneshot::channel();
-        let _ = self.link.send(LinkCmd::VoiceTicket { reply });
+        let _ = self.link.send(LinkCmd::VoiceTicket { thread, reply });
         rx.await.unwrap_or_else(|_| Err(stopped()))
     }
 }
@@ -168,7 +174,10 @@ impl Voice {
     /// Opens a connection to the URL that last answered while Kotlin builds the offer (§7.2).
     pub fn prepare(&self) {
         let (reply, rx) = oneshot::channel();
-        let _ = self.link.send(LinkCmd::VoiceTicket { reply });
+        let _ = self.link.send(LinkCmd::VoiceTicket {
+            thread: None,
+            reply,
+        });
         self.send(Cmd::Prepare { ticket: rx });
     }
 
@@ -181,7 +190,17 @@ impl Voice {
         start: CallStart,
         sink: Box<dyn EventSink>,
     ) -> Result<u64, CoreError> {
-        let ticket = self.ticket().await?;
+        let ticket = match self.ticket(start.thread).await {
+            Ok(t) => t,
+            Err(e) => {
+                // A rebind's next call refused (§7.7, §7.12): the ended call stops saying one
+                // follows. Any other start finds no restart owed, and nothing changes.
+                self.send(Cmd::StartRefused {
+                    words: e.to_string(),
+                });
+                return Err(e);
+            }
+        };
         let (reply, rx) = oneshot::channel();
         self.send(Cmd::Start {
             ticket: Box::new(ticket),
@@ -192,7 +211,34 @@ impl Voice {
         rx.await.unwrap_or_else(|_| Err(stopped()))
     }
 
-    /// The offer (no ICE gathering waited for) POSTed by the Kai folder with `takeover=ask` and
+    /// Talk in an opened thread while a call runs bound elsewhere (§7.12, rule 3): the running call
+    /// ends at its next quiet point (a pending bind at once) and `start`'s call follows it, as a
+    /// rebind's does (`CallEnd::restart`). A `start` that binds as the running call does calls a
+    /// move off (Stay itself is [`Voice::stay`]). `false`: no call runs (or it is ending), and the
+    /// caller starts `start` itself. Refused with the state's words as [`Voice::start`] is (a
+    /// temporary thread, the link).
+    pub async fn switch_to(&self, start: CallStart) -> Result<bool, CoreError> {
+        let ticket = self.ticket(start.thread).await?;
+        let (reply, rx) = oneshot::channel();
+        self.send(Cmd::Switch {
+            bind: ticket.bind_thread,
+            start,
+            reply,
+        });
+        rx.await.map_err(|_| stopped())
+    }
+
+    /// Stay (§7.12, rule 3): call `call`'s move to another thread is called off. It asks nothing of
+    /// the link, so the link's state never refuses it; refused with words when call `call` moved
+    /// already or ended (a Stay never applies to the next call).
+    pub async fn stay(&self, call: u64) -> Result<(), CoreError> {
+        let (reply, rx) = oneshot::channel();
+        self.send(Cmd::Stay { call, reply });
+        rx.await.unwrap_or_else(|_| Err(stopped()))
+    }
+
+    /// The offer (no ICE gathering waited for) POSTed by the call's binding (the Kai folder, or the
+    /// opened thread Talk named, §7.12) with `takeover=ask` and
     /// the `session` part (§7.3 step 3): lmgw's answer SDP, or why not (the call has ended then).
     /// An offer for another call than the current one is refused, as every per-call event is dropped.
     pub async fn offer(&self, call: u64, sdp: String) -> Result<String, CoreError> {

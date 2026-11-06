@@ -578,7 +578,7 @@ fn decided_words(g: &Given, d: &ApprovalDecided, own_by: Option<&str>) -> Option
 /// Whether lmgw's refusal code (an `error`'s on the call, the route's) says it refused the
 /// verdicts before deciding anything: an `approval_*` code but `approval_decided` (decided
 /// already, by someone), or the key's rate. Any other code may come after the decision was written
-/// (the resumed turn's failure: the model, an upstream timeout, `gpu_hold`).
+/// (the resumed turn's failure: the model, an upstream timeout, `gpu_hold`, `gpu_deferred`).
 pub fn refused_before_deciding(code: Option<&str>) -> bool {
     code.is_some_and(|c| (c.starts_with("approval_") && c != "approval_decided") || c == "key_rate")
 }

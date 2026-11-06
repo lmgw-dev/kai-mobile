@@ -27,7 +27,7 @@ private fun message(id: Long, text: String, streaming: Boolean = false, notices:
     MessageView(id, Role.ASSISTANT, text, emptyList(), "", null, false, streaming, emptyList(), null, notices)
 
 private fun view(state: ConnectionState, paired: Boolean) = ConnectionView(
-    state, "words", emptyList(), listOf(ConnectionAction.TRY_AGAIN), null, paired, null, null, null, false, null, null, null,
+    state, "words", emptyList(), listOf(ConnectionAction.TRY_AGAIN), null, paired, null, null, null, false, null, null,
 )
 
 private class Sink : HubSink {
@@ -51,7 +51,7 @@ private fun voiceView(call: Long, phase: CallPhase, end: CallEnd? = null) = Voic
     call = call.toULong(), phase = phase, ring = RingState.REST, words = "words", cue = false, spoken = false, pushToTalk = false,
     muted = false, paused = false, halfDuplex = false, pressed = false, kaiMuted = false, stoppable = false,
     heldBy = null, takingOver = false, pendingNote = null, waitingFor = null, threadId = 7, threadTitle = "Kai",
-    tool = null, awaiting = emptyList(), hold = false, holdFallback = null, heldStage = null, error = null, note = null, end = end,
+    tool = null, awaiting = emptyList(), hold = false, heldStage = null, fallbackStages = emptyList(), error = null, note = null, end = end,
 )
 
 class HubTest {

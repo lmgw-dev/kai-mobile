@@ -105,6 +105,10 @@ pub struct CallEnd {
     pub actions: Vec<VoiceAction>,
     /// A rebind: Kotlin starts this call at once, once the old PeerConnection is closed.
     pub restart: Option<CallStart>,
+    /// The thread the call bound by `chat_thread` (§7.12; `None`: the Kai folder): Reconnect and
+    /// Take over bind the same way.
+    #[uniffi(default)]
+    pub thread: Option<i64>,
 }
 
 /// Who a caption line is from.
@@ -171,6 +175,15 @@ pub struct VoiceView {
     pub pending_note: Option<String>,
     /// K16: another principal's turn runs in the thread (automatic mode keeps the track silent).
     pub waiting_for: Option<String>,
+    /// The thread the call binds by `chat_thread`: Talk in an opened thread (§7.12). `None`: the
+    /// Kai folder's current thread (every other entry point).
+    #[uniffi(default)]
+    pub bind_thread: Option<i64>,
+    /// Talk elsewhere during the call (§7.12, rule 3): the call ends at its next quiet point and
+    /// this one starts. `None`: no move is asked.
+    #[uniffi(default)]
+    pub switching: Option<CallStart>,
+    /// The thread the call is bound to (or will be), and its title as lmgw names it.
     pub thread_id: Option<i64>,
     pub thread_title: Option<String>,
     /// The tool the turn runs now.
@@ -178,11 +191,14 @@ pub struct VoiceView {
     /// The bound thread's calls waiting for the owner's verdict (their tools, `<label>__<name>`):
     /// Kai waits for a decision (§11); their cards are the hub's approvals.
     pub awaiting: Vec<String>,
-    /// The GPU hold (a badge), and the fallback alias that answers in its place.
+    /// The GPU hold (a badge).
     pub hold: bool,
-    pub hold_fallback: Option<String>,
     /// `lmgw.model.state {state: held}`: the stage and alias paused ("chat gemma").
     pub held_stage: Option<String>,
+    /// `lmgw.model.state {state: fallback}`: each stage whose model a fallback answers for, for
+    /// whatever reason lmgw has (the hold, the GPU full, a quota), as a line ("chat gemma: cloud
+    /// answers in its place").
+    pub fallback_stages: Vec<String>,
     /// The latest error lmgw sent, verbatim with its code.
     pub error: Option<String>,
     /// A static value the owner should know about in this call (push-to-talk's tail when
@@ -212,13 +228,15 @@ impl VoiceView {
             taking_over: false,
             pending_note: None,
             waiting_for: None,
+            bind_thread: None,
+            switching: None,
             thread_id: None,
             thread_title: None,
             tool: None,
             awaiting: Vec::new(),
             hold: false,
-            hold_fallback: None,
             held_stage: None,
+            fallback_stages: Vec::new(),
             error: None,
             note: None,
             end: None,

@@ -2,6 +2,7 @@ package dev.rootshell.kai.core
 
 import android.content.Context
 import android.os.Build
+import android.provider.Settings as AndroidSettings
 import dev.rootshell.kai.core.ffi.AppDirs
 import dev.rootshell.kai.core.ffi.AudioFocus
 import dev.rootshell.kai.core.ffi.CallStart
@@ -15,6 +16,8 @@ import dev.rootshell.kai.core.ffi.PairingPreview
 import dev.rootshell.kai.core.ffi.PairingView
 import dev.rootshell.kai.core.ffi.PlatformFacts
 import dev.rootshell.kai.core.ffi.PlayoutStats
+import dev.rootshell.kai.core.ffi.SearchIn
+import dev.rootshell.kai.core.ffi.SearchPageView
 import dev.rootshell.kai.core.ffi.Settings
 import dev.rootshell.kai.core.ffi.TransportState
 import dev.rootshell.kai.core.ffi.Update
@@ -52,6 +55,19 @@ class UniffiCoreFacade private constructor(private val core: Core) : CoreFacade 
         core.decide(approvalRequestId, approve)
     override suspend fun dismissApproval(approvalRequestId: String) = core.dismissApproval(approvalRequestId)
     override fun notificationGone(id: NotificationId) = core.notificationGone(id)
+    override fun browser(showing: Boolean) = core.browser(showing)
+    override fun browserArchived(showing: Boolean) = core.browserArchived(showing)
+    override suspend fun search(query: String, scope: SearchIn, folderId: Long?, offset: Long?): SearchPageView =
+        core.search(query, scope, folderId, offset)
+    override fun openThread(threadId: Long) = core.openThread(threadId)
+    override fun closeThread() = core.closeThread()
+    override suspend fun sendInThread(threadId: Long, text: String) = core.sendInThread(threadId, text)
+    override suspend fun newThread(folderId: Long): Long = core.newThread(folderId)
+    override suspend fun pinThread(threadId: Long, pinned: Boolean) = core.pinThread(threadId, pinned)
+    override suspend fun archiveThread(threadId: Long, archived: Boolean) = core.archiveThread(threadId, archived)
+    override suspend fun moveThread(threadId: Long, folderId: Long?) = core.moveThread(threadId, folderId)
+    override suspend fun renameThread(threadId: Long, title: String) = core.renameThread(threadId, title)
+    override suspend fun deleteThread(threadId: Long) = core.deleteThread(threadId)
 
     override val voice: VoiceFacade = UniffiVoice(core.voice())
 
@@ -59,6 +75,8 @@ class UniffiCoreFacade private constructor(private val core: Core) : CoreFacade 
     private class UniffiVoice(private val v: Voice) : VoiceFacade {
         override fun prepare() = v.prepare()
         override suspend fun start(start: CallStart, sink: EventSink): ULong = v.start(start, sink)
+        override suspend fun switchTo(start: CallStart): Boolean = v.switchTo(start)
+        override suspend fun stay(call: ULong) = v.stay(call)
         override suspend fun offer(call: ULong, sdp: String): String = v.offer(call, sdp)
         override fun transport(call: ULong, state: TransportState, detail: String) = v.transport(call, state, detail)
         override fun channelOpen(call: ULong) = v.channelOpen(call)
@@ -99,6 +117,8 @@ class UniffiCoreFacade private constructor(private val core: Core) : CoreFacade 
                     PlatformFacts(
                         os = "Android ${Build.VERSION.RELEASE}",
                         appVersion = version,
+                        appId = context.packageName,
+                        deviceName = deviceName(context),
                         notifiedApprovals = notifiedApprovals,
                         notifiedReplies = notifiedReplies,
                     ),
@@ -106,5 +126,14 @@ class UniffiCoreFacade private constructor(private val core: Core) : CoreFacade 
                 ),
             )
         }
+
+        /**
+         * The name the user gave the phone (Settings → About phone → Device name), else the model name; null when
+         * both are blank. Enrolment sends it as the device's own claim.
+         */
+        private fun deviceName(context: Context): String? =
+            AndroidSettings.Global.getString(context.contentResolver, AndroidSettings.Global.DEVICE_NAME)
+                ?.takeIf { it.isNotBlank() }
+                ?: Build.MODEL?.takeIf { it.isNotBlank() }
     }
 }

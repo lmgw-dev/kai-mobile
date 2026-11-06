@@ -17,12 +17,17 @@
 //! connection. A refusal over the authenticated link stops the retries (a key lmgw refuses, a
 //! lapse by the phone's own date) until Try again or Pair again; a handshake's alert never does.
 
+mod threads;
+mod voice;
+
+use voice::hears;
+
 use std::{path::PathBuf, sync::Arc, time::Duration};
 
 use arc_swap::ArcSwap;
 use lmgw_client::{
     feed::{FeedEvent, FeedItem, FeedReader},
-    requests::{self, ApiError, CredentialState, KeyRefused, ThreadDetail},
+    requests::{self, ApiError, CredentialState, KeyRefused, ThreadDetail, ThreadRow},
     types::realtime::RevokeKind,
 };
 
@@ -47,12 +52,15 @@ use crate::{
         Convo, Streaming,
         load::{Fail, Loaded},
         send::{self, Frame, StreamFail},
-        streaming_view,
     },
     keystore::{KEY_PREFIX, Keystore, KeystoreKey},
     notify::Replies,
     pairing::Enrolled,
     store::{self, APPROVALS_FILE, ApprovalsFile, LINK_FILE, LinkFile},
+    threads::{
+        Opened,
+        browser::{Browser, Lists},
+    },
     views::{
         ConnectionState, ConnectionView, ConversationStatus, Decided, GatewayView, KeyRefusal,
         MessagesDelta, NetworkFacts, NotificationKind, PairingView, Update,
@@ -144,6 +152,8 @@ pub enum Cmd {
     },
     /// A call's trigger (design §7.3 step 1): the link's facts, or why voice cannot start now.
     VoiceTicket {
+        /// The thread an opened thread's Talk names (§7.12); `None`: the Kai folder.
+        thread: Option<i64>,
         reply: oneshot::Sender<Result<Ticket, CoreError>>,
     },
     /// The call bound another thread than the conversation's (the folder rolled over at the
@@ -152,6 +162,9 @@ pub enum Cmd {
     /// A call of the phone's runs (its number) or none does: Kai's replies notify only when none
     /// does (§12.3), and the calls its session showed are its to answer (§11).
     CallRunning(Option<u64>),
+    /// The running call binds this thread by `chat_thread` (§7.12), or none does: its K16 facts
+    /// go to the voice task as they change.
+    CallThread(Option<i64>),
     /// The running call's session showed a call waiting for an approval (§11, api §6.4).
     CallApproval(Box<Shown>),
     /// lmgw said on the call that another client decided `id` (`lmgw.approval.decided`).
@@ -173,6 +186,55 @@ pub enum Cmd {
     },
     /// The Kai folder is gone (a call's 404 `chat_folder_not_found`): look it up again.
     Reload,
+    /// The threads browser shows or closed (§6.4).
+    Browser(bool),
+    /// Its archived section opened or closed.
+    BrowserArchived(bool),
+    /// A read of the browser's lists ended.
+    BrowserRead {
+        generation: u64,
+        identity: [u8; 32],
+        result: Box<Result<Lists, Fail>>,
+    },
+    /// A thread opened, or the opened one closed (`None`).
+    Open(Option<i64>),
+    /// A read of the opened thread ended.
+    OpenedRead {
+        seq: u64,
+        identity: [u8; 32],
+        result: Box<Result<ThreadDetail, Fail>>,
+    },
+    /// A send into the opened thread starts: the link and the opening's number, or why not.
+    ThreadSendStart {
+        thread: i64,
+        reply: oneshot::Sender<Result<(Handle, u64), CoreError>>,
+    },
+    ThreadFrame {
+        seq: u64,
+        frame: Frame,
+    },
+    ThreadSendEnded {
+        seq: u64,
+        identity: [u8; 32],
+        result: Result<(), StreamFail>,
+    },
+    /// A browser request (a search, a create, an action) starts: the link and the Kai
+    /// conversation's thread, or why there is no link now.
+    Linked {
+        reply: oneshot::Sender<Result<(Handle, Option<i64>), CoreError>>,
+    },
+    /// An action answered: the thread as it is now, `None` once deleted.
+    Acted {
+        identity: [u8; 32],
+        thread: i64,
+        row: Option<Box<ThreadRow>>,
+    },
+    /// A browser request's refusal: a key refusal is acted on (§5.5).
+    Refused {
+        identity: [u8; 32],
+        status: u16,
+        error: ApiError,
+    },
     /// The core goes.
     Shutdown,
 }
@@ -304,7 +366,6 @@ pub struct Actor {
     said: Said,
     device_name: Option<String>,
     held: bool,
-    hold_fallback: Option<String>,
     dashboard_url: Option<String>,
     caught_up: bool,
     /// A `caught_up` came since start (or since another gateway's pairing): the open set is known.
@@ -331,7 +392,18 @@ pub struct Actor {
     /// The assistant overlay shows the approval cards (§9.2).
     overlay: bool,
     /// The hold as the voice task last heard it.
-    voice_hold: Option<(bool, Option<String>)>,
+    voice_hold: Option<bool>,
+    /// The threads browser's lists (§6.4).
+    browser: Browser,
+    /// The Kai conversation's thread and folder as the browser last marked them.
+    threads_kai: (Option<i64>, Option<i64>),
+    /// The opened thread, and the number of the last opening.
+    opened: Option<Opened>,
+    open_seq: u64,
+    /// The thread the running call binds by `chat_thread`, and who else answers there as the voice
+    /// task last heard it (§7.12).
+    call_thread: Option<i64>,
+    call_live: Option<Vec<String>>,
 }
 
 impl Actor {
@@ -409,7 +481,6 @@ impl Actor {
             said,
             device_name: None,
             held: false,
-            hold_fallback: None,
             dashboard_url: None,
             caught_up: false,
             open_known: false,
@@ -427,6 +498,12 @@ impl Actor {
             in_call: false,
             overlay: false,
             voice_hold: None,
+            browser: Browser::default(),
+            threads_kai: (None, None),
+            opened: None,
+            open_seq: 0,
+            call_thread: None,
+            call_live: None,
         };
         if let Some(n) = notice {
             tracing::warn!(%n, "link: the stored pairing was not loaded");
@@ -556,7 +633,7 @@ impl Actor {
                 tracing::info!(id = %d.id, "approvals: lmgw.timeout_s passed before the open set was known; the decision was not sent");
                 let _ = d.reply.send(Err(CoreError::Unreachable {
                     reason: format!(
-                        "Kai was not connected to lmgw within {} s (lmgw.timeout_s), so the \
+                        "Kai was not connected to lmgw within {} s (Settings → Advanced connection → Wait for lmgw), so the \
                          decision was not sent; the call still waits. {}",
                         self.timeout().as_secs(),
                         self.said.words
@@ -572,10 +649,12 @@ impl Actor {
         let timeout = self.timeout().as_secs();
         match self.phase {
             Phase::Idle | Phase::Racing => format!(
-                "lmgw did not answer the feed's request within {timeout} s (lmgw.timeout_s)"
+                "lmgw did not answer the feed's request within {timeout} s (Settings → Advanced connection → Wait for lmgw)"
             ),
             Phase::Open { began: false, .. } => {
-                format!("lmgw sent no hello, nor any byte, within {timeout} s (lmgw.timeout_s)")
+                format!(
+                    "lmgw sent no hello, nor any byte, within {timeout} s (Settings → Advanced connection → Wait for lmgw)"
+                )
             }
             Phase::Open { up: false, .. } => format!(
                 "lmgw began the feed but sent no hello and nothing else for {} s (two keep-alive \
@@ -583,7 +662,7 @@ impl Actor {
                 2 * self.stated.map_or(timeout, u64::from)
             ),
             Phase::Open { up: true, .. } => format!(
-                "lmgw sent nothing for {} s (two hello.keepalive_s intervals): the link is dead",
+                "lmgw sent nothing for {} s (two keep-alive intervals): the link is dead",
                 2 * self.stated.map_or(timeout, u64::from)
             ),
         }
@@ -663,6 +742,7 @@ impl Actor {
         }
         if matches!(self.phase, Phase::Open { up: true, .. }) {
             self.convo.disconnected();
+            self.threads_disconnected();
         }
         self.phase = Phase::Idle;
         self.dead_at = None;
@@ -914,7 +994,6 @@ impl Actor {
                     self.convo.live(&h.voice, &h.turns);
                     self.device_name = Some(h.principal.name.clone());
                     self.held = h.hold.active;
-                    self.hold_fallback = h.hold.fallback_alias.clone();
                     self.stated = Some(h.keepalive_s);
                     tracing::info!(device = %h.principal.name, keepalive_s = h.keepalive_s, held = h.hold.active, "link: the feed is up");
                 }
@@ -942,6 +1021,7 @@ impl Actor {
                     tracing::warn!(%event, bytes = data.len(), "link: an event whose data does not read; reloading as for resync");
                     if up {
                         self.reload(false);
+                        self.threads_reread();
                     }
                 }
                 FeedItem::KeepAlive => {}
@@ -985,6 +1065,7 @@ impl Actor {
             self.said = Said::connected(&name);
             self.stopped = false;
             self.reload(false);
+            self.threads_reread();
         }
         if caught_up_now {
             self.caught_up = true;
@@ -1021,26 +1102,26 @@ impl Actor {
         match &ev {
             FeedEvent::State(s) => {
                 self.held = s.hold.active;
-                self.hold_fallback = s.hold.fallback_alias.clone();
                 self.convo.live(&s.voice, &s.turns);
                 self.publish_conversation();
+                self.threads_event(&ev);
                 return;
             }
             FeedEvent::Hold(h) => {
                 self.held = h.active;
-                self.hold_fallback = h.fallback_alias.clone();
                 return;
             }
             FeedEvent::Resync(r) => {
                 tracing::warn!(reason = %r.reason, "link: resync; reloading the conversation");
                 self.reload(false);
+                self.threads_event(&ev);
                 return;
             }
             FeedEvent::MessageAdded(m) | FeedEvent::MessageUpdated(m) => {
                 let updated = matches!(ev, FeedEvent::MessageUpdated(_));
                 let collect = !self.caught_up || !self.convo.threads_known;
                 let convo = &self.convo;
-                let quiet = self.visible || self.in_call;
+                let quiet = self.visible || self.hears(m.thread_id);
                 let ups = self
                     .replies
                     .message(m, updated, collect, quiet, |t| convo.is_kai_thread(t));
@@ -1072,6 +1153,9 @@ impl Actor {
         if asks.view {
             self.publish_conversation();
         }
+        self.threads_event(&ev);
+        self.call_thread_gone(&ev);
+        self.publish_call_live();
     }
 
     // ------------------------------------------------------------------ the conversation
@@ -1079,9 +1163,9 @@ impl Actor {
     /// Looks the folder up and asks `current` (§6.1). `probe`: the app became visible, and a
     /// failure reopens the feed at once (§12.2).
     fn reload(&mut self, probe: bool) {
-        let Some(link) = self.link.as_ref() else {
+        if self.link.is_none() {
             return;
-        };
+        }
         if !matches!(self.phase, Phase::Open { up: true, .. }) && !probe {
             return;
         }
@@ -1091,6 +1175,9 @@ impl Actor {
             self.convo.status = Some(ConversationStatus::Loading);
             self.publish_conversation();
         }
+        let Some(link) = self.link.as_ref() else {
+            return;
+        };
         let h = link.handle();
         let name = self.settings().conversation.folder_name.clone();
         let remembered = link.file.folder_id;
@@ -1167,6 +1254,7 @@ impl Actor {
                 self.convo.note = None;
                 let delta = self.convo.thread_loaded(&detail);
                 self.emit(Update::Messages { delta });
+                self.kai_known();
                 if self.visible {
                     let ups = self.replies.opened(detail.thread.row.id);
                     self.emit_all(ups);
@@ -1245,6 +1333,7 @@ impl Actor {
             Ok(detail) => {
                 let delta = self.convo.thread_loaded(&detail);
                 self.emit(Update::Messages { delta });
+                self.kai_known();
                 self.publish_conversation();
             }
             Err(Fail::Refused { status, error }) => {
@@ -1261,9 +1350,11 @@ impl Actor {
             return;
         }
         let convo = &self.convo;
-        let ups = self
-            .replies
-            .flush(self.visible || self.in_call, |t| convo.is_kai_thread(t));
+        let (visible, in_call, call_thread) = (self.visible, self.in_call, self.call_thread);
+        let ups = self.replies.flush(
+            |t| visible || hears(in_call, call_thread, t),
+            |t| convo.is_kai_thread(t),
+        );
         self.emit_all(ups);
     }
 
@@ -1383,9 +1474,10 @@ impl Actor {
                 result,
                 resent,
             } => self.decide_ended(identity, ids, result, resent),
-            Cmd::VoiceTicket { reply } => {
-                let _ = reply.send(self.voice_ticket());
+            Cmd::VoiceTicket { thread, reply } => {
+                let _ = reply.send(self.voice_ticket(thread));
             }
+            Cmd::CallThread(thread) => self.call_thread(thread),
             Cmd::VoiceThread(t) => {
                 if self.convo.thread_id != Some(t) && self.link.is_some() {
                     tracing::info!(
@@ -1423,13 +1515,51 @@ impl Actor {
                 self.request_refused(identity, status, &error);
             }
             Cmd::Reload => self.reload(false),
+            Cmd::Browser(shown) => self.browser_show(shown),
+            Cmd::BrowserArchived(shown) => self.browser_archived(shown),
+            Cmd::BrowserRead {
+                generation,
+                identity,
+                result,
+            } => self.browser_read(generation, identity, *result),
+            Cmd::Open(id) => self.open(id),
+            Cmd::OpenedRead {
+                seq,
+                identity,
+                result,
+            } => self.opened_read(seq, identity, *result),
+            Cmd::ThreadSendStart { thread, reply } => {
+                let r = self.thread_send_start(thread);
+                let _ = reply.send(r);
+            }
+            Cmd::ThreadFrame { seq, frame } => self.thread_frame(seq, frame),
+            Cmd::ThreadSendEnded {
+                seq,
+                identity,
+                result,
+            } => self.thread_send_ended(seq, identity, result),
+            Cmd::Linked { reply } => {
+                let _ = reply.send(self.linked());
+            }
+            Cmd::Acted {
+                identity,
+                thread,
+                row,
+            } => self.acted(identity, thread, row.map(|r| *r)),
+            Cmd::Refused {
+                identity,
+                status,
+                error,
+            } => {
+                self.request_refused(identity, status, &error);
+            }
         }
     }
 
     /// What a call needs of the link (§7.3 step 1), or the state's words when voice cannot start:
     /// not paired, no network, a refusal that stopped the link, the owner's Confirm still owed. A
     /// link that is only reconnecting does not hold the call back: the POST races on its own.
-    fn voice_ticket(&self) -> Result<Ticket, CoreError> {
+    fn voice_ticket(&self, thread: Option<i64>) -> Result<Ticket, CoreError> {
         let Some(link) = self.link.as_ref() else {
             return Err(CoreError::NotConnected {
                 reason: Said::not_paired().words,
@@ -1453,13 +1583,15 @@ impl Actor {
                 reason: self.said.words.clone(),
             });
         }
-        if self.convo.status == Some(ConversationStatus::NotReady) {
+        // A thread's call (§7.12) needs none of the Kai folder's steps.
+        let bind = crate::voice::bind::choose(thread, self.convo.thread_id)?;
+        if bind.is_none() && self.convo.status == Some(ConversationStatus::NotReady) {
             return Err(CoreError::NotReady {
                 reason: self.convo.steps.clone().unwrap_or_default(),
             });
         }
         let view = self.convo.view(&self.settings().conversation.folder_name);
-        Ok(Ticket {
+        let ticket = Ticket {
             tls: link.tls.clone(),
             urls: link.order(),
             last_good: link.file.last_good.clone(),
@@ -1470,10 +1602,14 @@ impl Actor {
                 .map(|f| f.id)
                 .or(link.file.folder_id),
             folder_name: self.settings().conversation.folder_name.clone(),
+            bind_thread: None,
             voice_by: view.voice_by.clone(),
             thread: view.thread_id.zip(view.thread_title.clone()),
             held: self.held,
-            hold_fallback: self.hold_fallback.clone(),
+        };
+        Ok(match bind {
+            Some(t) => self.thread_ticket(t, ticket),
+            None => ticket,
         })
     }
 
@@ -1545,6 +1681,13 @@ impl Actor {
             if let Some(t) = self.convo.thread_id {
                 let ups = self.replies.opened(t);
                 self.emit_all(ups);
+            }
+            if let Some(t) = self.opened.as_ref().map(|o| o.id) {
+                let ups = self.replies.opened(t);
+                self.emit_all(ups);
+            }
+            if matches!(self.phase, Phase::Open { up: true, .. }) {
+                self.threads_reread();
             }
         } else if !self.overlay {
             let out = self.approvals.backgrounded();
@@ -1684,6 +1827,7 @@ impl Actor {
         };
         self.delay = FIRST_RETRY;
         self.retry_at = Some(self.now());
+        self.threads_reset();
         self.publish_conversation();
         Ok(PairingView {
             device_name: name,
@@ -1726,6 +1870,7 @@ impl Actor {
         self.unconfirmed = false;
         self.device_name = None;
         self.said = Said::not_paired();
+        self.threads_reset();
         self.publish_conversation();
         self.publish_approvals();
     }
@@ -1792,30 +1937,12 @@ impl Actor {
         if let Err(StreamFail::Refused { status, error }) = &result {
             self.request_refused(identity, *status, error);
         }
-        if let Some(s) = self.convo.streaming.take() {
-            // The stream ended without its `done`: what came stays, with why.
-            let mut s = s;
-            if s.error.is_none() {
-                s.error = Some(match &result {
-                    Err(StreamFail::Refused { error, .. }) => {
-                        format!("{} ({})", error.message, error.code)
-                    }
-                    Err(StreamFail::NoAnswer(n)) => n.words(self.timeout()),
-                    Err(StreamFail::Broke(why)) => format!("the reply broke off: {why}"),
-                    Ok(()) => "the reply ended without its done".to_owned(),
-                });
-            }
-            let mut v = streaming_view(&s);
-            v.streaming = false;
-            self.convo.unsaved = Some(s.clone());
-            self.emit(Update::Messages {
-                delta: MessagesDelta {
-                    reset: false,
-                    thread_id: Some(s.thread_id),
-                    upsert: vec![v],
-                    removed: Vec::new(),
-                },
-            });
+        // The stream ended without its `done`: what came stays, with why.
+        if let Some(delta) = self
+            .convo
+            .stream_ended(ended_words(&result, self.timeout()))
+        {
+            self.emit(Update::Messages { delta });
         }
         self.publish_conversation();
     }
@@ -2075,13 +2202,24 @@ impl Actor {
         })
     }
 
-    fn publish_conversation(&self) {
+    fn publish_conversation(&mut self) {
         let name = self.settings().conversation.folder_name.clone();
         let view = self.convo.view(&name);
+        // The browser and the opened thread mark the Kai conversation's thread and folder.
+        let kai = (
+            self.convo.thread_id,
+            self.convo.folder.as_ref().map(|f| f.id),
+        );
+        if kai != self.threads_kai {
+            self.threads_kai = kai;
+            self.publish_browser();
+            self.publish_opened();
+        }
         let _ = self.ctx.voice.send(VoiceCmd::Conversation {
             thread: view.thread_id,
             answering: view.answering.clone(),
         });
+        self.publish_call_live();
         self.emit(Update::Conversation { view });
     }
 
@@ -2098,13 +2236,9 @@ impl Actor {
 
     /// The connection's view and the wake-up, when they changed.
     fn publish(&mut self) {
-        let hold = (self.held, self.hold_fallback.clone());
-        if self.voice_hold.as_ref() != Some(&hold) {
-            let _ = self.ctx.voice.send(VoiceCmd::Hold {
-                held: hold.0,
-                fallback: hold.1.clone(),
-            });
-            self.voice_hold = Some(hold);
+        if self.voice_hold != Some(self.held) {
+            let _ = self.ctx.voice.send(VoiceCmd::Hold { held: self.held });
+            self.voice_hold = Some(self.held);
         }
         let view = self.view();
         if self.published_view.as_ref() != Some(&view) {
@@ -2147,7 +2281,6 @@ impl Actor {
                 .filter(|_| self.phase == Phase::Idle)
                 .map(|r| wall + i64::try_from(r.saturating_sub(now)).unwrap_or(i64::MAX)),
             held: self.held,
-            hold_fallback: self.hold_fallback.clone(),
             cert_notice,
             gateway: link.map(|l| GatewayView {
                 name: l.file.name.clone(),
@@ -2163,6 +2296,16 @@ impl Actor {
                 key_alias: l.file.alias.clone(),
             }),
         }
+    }
+}
+
+/// Why a send's stream ended without its `done`, in the turn's words.
+fn ended_words(result: &Result<(), StreamFail>, timeout: Duration) -> String {
+    match result {
+        Err(StreamFail::Refused { error, .. }) => format!("{} ({})", error.message, error.code),
+        Err(StreamFail::NoAnswer(n)) => n.words(timeout),
+        Err(StreamFail::Broke(why)) => format!("the reply broke off: {why}"),
+        Ok(()) => "the reply ended without its done".to_owned(),
     }
 }
 

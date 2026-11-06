@@ -15,6 +15,8 @@ import dev.rootshell.kai.core.ffi.NotificationId
 import dev.rootshell.kai.core.ffi.PairingPreview
 import dev.rootshell.kai.core.ffi.PairingView
 import dev.rootshell.kai.core.ffi.PlayoutStats
+import dev.rootshell.kai.core.ffi.SearchIn
+import dev.rootshell.kai.core.ffi.SearchPageView
 import dev.rootshell.kai.core.ffi.Settings
 import dev.rootshell.kai.core.ffi.TransportState
 import dev.rootshell.kai.core.ffi.Update
@@ -50,12 +52,37 @@ class FakeCore : CoreFacade {
     }
     override suspend fun dismissApproval(approvalRequestId: String) { calls += "dismiss $approvalRequestId" }
     override fun notificationGone(id: NotificationId) { calls += "gone ${id.key}" }
+    override fun browser(showing: Boolean) { calls += "browser $showing" }
+    override fun browserArchived(showing: Boolean) { calls += "archived $showing" }
+    override suspend fun search(query: String, scope: SearchIn, folderId: Long?, offset: Long?): SearchPageView {
+        calls += "search $query $scope $folderId $offset"
+        return SearchPageView(0, emptyList(), null)
+    }
+    override fun openThread(threadId: Long) { calls += "open $threadId" }
+    override fun closeThread() { calls += "close" }
+    override suspend fun sendInThread(threadId: Long, text: String) { calls += "send $threadId $text" }
+    override suspend fun newThread(folderId: Long): Long {
+        calls += "new thread $folderId"
+        return 99
+    }
+    override suspend fun pinThread(threadId: Long, pinned: Boolean) { calls += "pin $threadId $pinned" }
+    override suspend fun archiveThread(threadId: Long, archived: Boolean) { calls += "archive $threadId $archived" }
+    override suspend fun moveThread(threadId: Long, folderId: Long?) { calls += "move $threadId $folderId" }
+    override suspend fun renameThread(threadId: Long, title: String) { calls += "rename $threadId $title" }
+    override suspend fun deleteThread(threadId: Long) { calls += "delete $threadId" }
 
     override val voice: VoiceFacade = object : VoiceFacade {
         override fun prepare() { calls += "voice prepare" }
         override suspend fun start(start: CallStart, sink: EventSink): ULong {
             calls += "voice start ${start.takeOver}"
             return 1uL
+        }
+        override suspend fun switchTo(start: CallStart): Boolean {
+            calls += "voice switch ${start.thread}"
+            return false
+        }
+        override suspend fun stay(call: ULong) {
+            calls += "voice stay $call"
         }
         override suspend fun offer(call: ULong, sdp: String): String = "v=0"
         override fun transport(call: ULong, state: TransportState, detail: String) { calls += "voice transport $call $state" }

@@ -128,8 +128,14 @@ class CallEngine(
         var closed = false
     }
 
-    /** A rebind's next call (§7.7), started once call `first`'s PeerConnection is closed. */
+    /**
+     * A rebind's or a move's next call (§7.7, §7.12), started once call `first`'s PeerConnection is
+     * closed, and the number of the call whose restart is on its way to the core (0: none). From
+     * the one to the other's answer no start of its own begins: it would race the restart, and the
+     * restart's refusal would end the call that won.
+     */
     private var restart: Pair<Int, CallStart>? = null
+    private var restarting = 0
 
     /** The factory and its device module (design §7.2, §8.1), and the warm connection; idempotent. */
     fun prepare() {
@@ -205,8 +211,28 @@ class CallEngine(
      * took the call, with its number, so the assistant overlay can name it at once (a dismissal
      * while the offer is on its way, §9.2); its end comes through the listener with the core's
      * words, also when libwebrtc or lmgw fail it afterwards. Refused, the core's words of why.
+     * Between a rebind's two calls it answers [Started.Moving]: the next call is coming, and goes
+     * to `start` instead while it has not left yet (the latest choice wins, §7.12 rule 3).
      */
     suspend fun start(start: CallStart): Started {
+        if (withContext(dispatcher) { joinRestart(start) }) return Started.Moving
+        return begin(start)
+    }
+
+    /**
+     * On the voice thread: whether a rebind's next call is owed or on its way, `start` taking the
+     * place of one that has not left yet.
+     */
+    private fun joinRestart(start: CallStart): Boolean {
+        restart?.let { (n, _) ->
+            Log.i(TAG, "voice: a start between a rebind's two calls; the next call goes there")
+            restart = n to start
+            return true
+        }
+        return restarting != 0
+    }
+
+    private suspend fun begin(start: CallStart): Started {
         val n = withContext(dispatcher) {
             val n = order.asked()
             pending = Peer(n)
@@ -234,6 +260,24 @@ class CallEngine(
         }
         scope.launch { connect(n, id) }
         return Started.Call(id)
+    }
+
+    /**
+     * Talk (design §7.12): a start that names an opened thread first asks a running call to move
+     * there at its next quiet point, and starts the call itself only when none runs; every other
+     * start (the Kai conversation's entry points) is [start] as before, and so are Take over and a
+     * start between a rebind's two calls: an ended call's Take over is a call of its own, refused
+     * while another runs, never a move of that one.
+     */
+    suspend fun talk(start: CallStart): Started {
+        if (start.thread == null || start.takeOver) return start(start)
+        if (withContext(dispatcher) { joinRestart(start) }) return Started.Moving
+        val moving = try {
+            core.voice.switchTo(start)
+        } catch (e: CoreException) {
+            return Started.Refused(e.message ?: "voice could not start")
+        }
+        return if (moving) Started.Moving else start(start)
     }
 
     /** Call `n` (the core's `id`): the PeerConnection, its offer POSTed, lmgw's answer set. */
@@ -435,13 +479,19 @@ class CallEngine(
             dispose(peer)
             val again = restart?.takeIf { it.first == n }?.second ?: return@on
             restart = null
-            // A rebind (§7.7): the next call binds by the folder at once.
+            restarting = n
+            // A rebind (§7.7) or a move (§7.12): the next call at once, bound as the end said.
             scope.launch {
-                val why = (start(again) as? Started.Refused)?.words
-                if (why != null) {
-                    Log.i(TAG, "voice: the rebind did not start: $why")
-                    listener.callEnded(CallEnd(EndReason.REFUSED, why, null, null, emptyList(), null))
-                }
+                val started = begin(again)
+                // On the voice thread again (the scope's dispatcher).
+                restarting = 0
+                val why = (started as? Started.Refused)?.words ?: return@launch
+                Log.i(TAG, "voice: the rebind did not start: $why")
+                // Call `n`'s end for the owner, unless another call is the current one by now: its
+                // audio is that call's.
+                val end = CallEnd(EndReason.REFUSED, why, null, null, emptyList(), null)
+                val heard = order.ended(n, end)
+                if (heard != null) hear(n, heard) else Log.i(TAG, "voice: another call runs; its audio stays")
             }
         }
 

@@ -51,7 +51,8 @@ impl Fail {
     }
 }
 
-async fn get<T>(
+/// One request whose answer `read` types; a refusal keeps its status.
+pub(crate) async fn get<T>(
     h: &Handle,
     req: requests::Request,
     timeout: Duration,

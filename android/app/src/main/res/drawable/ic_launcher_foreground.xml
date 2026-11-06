@@ -1,13 +1,28 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Kai's ring at rest, inside the adaptive icon's safe zone (the middle 66 of 108 dp). -->
+<!-- Kai's logo, the ring with the three level bars, inside the adaptive icon's safe zone (the middle 66 of 108 dp); the paths are the app icon SVG's shapes at 1024 units, scaled by the group. -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="108dp"
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
-    <path
-        android:fillColor="#00000000"
-        android:pathData="M54,54m-20,0a20,20 0,1 1,40 0a20,20 0,1 1,-40 0"
-        android:strokeColor="@color/kai_icon_ring"
-        android:strokeWidth="7" />
+    <group
+        android:scaleX="0.09538"
+        android:scaleY="0.09538"
+        android:translateX="5.1676"
+        android:translateY="5.1676">
+        <path
+            android:fillColor="#00000000"
+            android:pathData="M512,512m-300,0a300,300 0,1 1,600 0a300,300 0,1 1,-600 0"
+            android:strokeColor="#FFF4F6F8"
+            android:strokeWidth="92" />
+        <path
+            android:fillColor="#FFA56EF6"
+            android:pathData="M324,462a42,42 0 0,1 84,0v100a42,42 0 0,1 -84,0z" />
+        <path
+            android:fillColor="#FF3DAEE9"
+            android:pathData="M462,374a50,50 0 0,1 100,0v276a50,50 0 0,1 -100,0z" />
+        <path
+            android:fillColor="#FF2DC9A6"
+            android:pathData="M616,462a42,42 0 0,1 84,0v100a42,42 0 0,1 -84,0z" />
+    </group>
 </vector>

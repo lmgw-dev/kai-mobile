@@ -58,6 +58,7 @@ fn builder(tls: &Tls, base: &str, req: &Request) -> reqwest::RequestBuilder {
     let mut rb = match req.method {
         Method::Get => http.get(url),
         Method::Post => http.post(url),
+        Method::Put => http.put(url),
     };
     for h in &req.headers {
         rb = rb.header(h.name.as_str(), h.value.as_str());
@@ -126,7 +127,10 @@ pub async fn race_base(
             .map(|u| {
                 (
                     u,
-                    format!("no answer within {} s (lmgw.timeout_s)", timeout.as_secs()),
+                    format!(
+                        "no answer within {} s (Settings → Advanced connection → Wait for lmgw)",
+                        timeout.as_secs()
+                    ),
                 )
             })
             .collect()),

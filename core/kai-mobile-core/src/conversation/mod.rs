@@ -208,6 +208,47 @@ impl Convo {
         })
     }
 
+    /// The phone's own send ended without its `done` (`why`): what came stays as the unsaved turn,
+    /// with why, until the next send. `None` when no send was streaming.
+    pub fn stream_ended(&mut self, why: String) -> Option<MessagesDelta> {
+        let mut s = self.streaming.take()?;
+        if s.error.is_none() {
+            s.error = Some(why);
+        }
+        let mut v = streaming_view(&s);
+        v.streaming = false;
+        let thread = s.thread_id;
+        self.unsaved = Some(s);
+        Some(MessagesDelta {
+            reset: false,
+            thread_id: Some(thread),
+            upsert: vec![v],
+            removed: Vec::new(),
+        })
+    }
+
+    /// Takes over what `other` knows live (who answers where, who holds which thread's voice, the
+    /// phone's own `by`): an opened thread starts from the Kai conversation's facts until the next
+    /// `state` (design §6.4).
+    pub fn seed_live(&mut self, other: &Convo) {
+        self.answering = other.answering.clone();
+        self.voice = other.voice.clone();
+        self.own_by = other.own_by.clone();
+    }
+
+    /// Who else answers in `thread` now (K16), whichever thread it is.
+    pub fn answering_in(&self, thread: i64) -> Vec<String> {
+        self.answering
+            .get(&thread)
+            .map(|s| s.iter().cloned().collect())
+            .unwrap_or_default()
+    }
+
+    /// Who else holds `thread`'s voice now, whichever thread it is.
+    pub fn voice_on(&self, thread: i64) -> Option<String> {
+        self.voice.get(&thread).cloned()
+    }
+
     /// A connection ended: what lmgw told live (turns, voice) is unknown until the next `hello`.
     pub fn disconnected(&mut self) {
         self.answering.clear();
@@ -232,12 +273,15 @@ impl Convo {
     /// lmgw has named the new thread. The old thread's messages, its unsaved turn and its live
     /// facts go; with no thread, every later frame or `message.*` event of the old one fails the
     /// thread test and is dropped, until `current` (or `folder.current`) names the new thread.
+    /// Other threads' live facts stay: they are the feed's, and a call bound to another thread
+    /// (§7.12) and an opened thread's seed read them.
     pub fn cleared(&mut self) -> MessagesDelta {
-        self.thread_id = None;
+        if let Some(old) = self.thread_id.take() {
+            self.answering.remove(&old);
+        }
         self.thread_title = None;
         self.messages.clear();
         self.unsaved = None;
-        self.answering.clear();
         MessagesDelta {
             reset: true,
             thread_id: None,
@@ -250,14 +294,15 @@ impl Convo {
     pub fn thread_loaded(&mut self, detail: &ThreadDetail) -> MessagesDelta {
         let id = detail.thread.row.id;
         let moved = self.thread_id != Some(id);
+        // The old thread's live facts go with it (other threads' stay, as at `cleared`).
+        if moved && let Some(old) = self.thread_id {
+            self.answering.remove(&old);
+        }
         self.thread_id = Some(id);
         self.thread_title = Some(detail.thread.row.title.clone());
         self.kai_threads.insert(id);
         self.messages = detail.messages.iter().map(|m| (m.id, m.clone())).collect();
         let notes = &self.notes;
-        if moved {
-            self.answering.retain(|t, _| *t == id);
-        }
         let mut upsert: Vec<MessageView> = self
             .messages
             .values()

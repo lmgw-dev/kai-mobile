@@ -20,7 +20,7 @@ private fun view(call: Long, phase: CallPhase, spoken: Boolean = false, end: Cal
     call = call.toULong(), phase = phase, ring = RingState.LISTENING, words = "Listening", cue = true, spoken = spoken,
     pushToTalk = false, muted = false, paused = false, halfDuplex = false, pressed = false, kaiMuted = false,
     stoppable = false, heldBy = null, takingOver = false, pendingNote = null, waitingFor = null, threadId = 7,
-    threadTitle = "Kai", tool = null, awaiting = emptyList(), hold = false, holdFallback = null, heldStage = null, error = null, note = null,
+    threadTitle = "Kai", tool = null, awaiting = emptyList(), hold = false, heldStage = null, fallbackStages = emptyList(), error = null, note = null,
     end = end,
 )
 
